@@ -86,58 +86,7 @@ cd webcpp-engine && ./build-run.sh
 > - `mysql_connection_pool`（MySQL 异步连接池）与 `coro`（协程库）均已包含在本仓库；镜像构建 context
 >   需为仓库的**上级目录**（Dockerfile 的 COPY 路径为 `vue-web/...`），见 `webcpp-engine/Dockerfile` 注释。
 
-### 3. 平台差异速查
-
-| 场景 | 说明 |
-|---|---|
-| Windows 局域网共享 | Docker Desktop 端口映射到 Windows 主机，局域网设备直接访问 Windows 局域网 IP 即可 |
-| WSL2 内直接跑服务（不走 Docker） | 需 `netsh interface portproxy` 转发或 WSL 镜像网络模式，局域网设备才能直连 |
-| 局域网 IP 自动探测失败（如多网卡取错） | 手动指定：`export HOST_LAN_IP="192.168.x.x"` 后再执行 `./build-run.sh` |
-
-### 4. 可选：WSL2 / Linux 内直接编译运行（不走 Docker）
-
-WSL2 提供完整 Linux 内核，epoll 与 GCC 12 均可用：
-
-```bash
-# 1. 安装编译依赖
-sudo apt update && sudo apt install -y gcc-12 g++-12 cmake \
-  libmysqlclient-dev libssl-dev libyaml-cpp-dev
-
-# 2. 构建前端
-cd my-web && npm install && npm run build
-
-# 3. 准备本地运行配置（仓库内 blog.yaml 为 Docker 容器专用，需改 doc_root 与 MySQL 地址）
-cat > webcpp-engine/build/local.yaml <<'EOF'
-server:
-  host: 0.0.0.0
-  port: 8443
-  threads: 4
-  doc_root: /absolute/path/to/my-web/dist
-  log_dir: /tmp/blog-logs
-  log_level: info
-mysql:
-  host: 127.0.0.1
-  port: 3306
-  user: root
-  password: "123456"
-  database: blog_db
-  min_size: 4
-  max_size: 16
-EOF
-
-# 4. 编译后端
-cmake -S webcpp-engine -B webcpp-engine/build \
-  -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-12 \
-  -DCORO_DIR=$(pwd)/coro -DMYSQL_POOL_DIR=$(pwd)/mysql_connection_pool
-cmake --build webcpp-engine/build -j --target demo_server
-
-# 5. 运行
-./webcpp-engine/build/demo_server -c webcpp-engine/build/local.yaml
-```
-
-> 注：MySQL 需让 `127.0.0.1:3306` 可达（如 `docker run -d --name mysql1 -p 3306:3306 -e MYSQL_ROOT_PASSWORD=123456 mysql:8.0`）。
-
-### 5. 原生编译限制
+### 3. 原生编译限制
 
 - **事件循环**：`coro` 协程库只有 epoll（Linux）/ kqueue（macOS）实现，**没有 Windows IOCP**，Windows 不支持原生编译，必须走 Docker / WSL2；
 - **协程 ABI**：后端用 GCC `-fcoroutines` 专用 ABI（MSVC / clang 不兼容），需 GCC 12；
