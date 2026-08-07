@@ -1,0 +1,19 @@
+# webcpp-engine 博客后端运行配置（Docker 容器内使用）
+server:
+  host: 0.0.0.0
+  port: 8443
+  threads: 4
+  doc_root: /app/www
+  log_dir: /app/logs
+  log_level: info
+
+# MySQL 连接池：后端网关与 MySQL 都跑在 Docker 同一 user-defined 网络 blog-net，
+# 通过容器名 mysql1 直接互连（不走宿主机映射）
+mysql:
+  host: mysql1
+  port: 3306
+  user: root
+  password: "123456"
+  database: blog_db
+  min_size: 4
+  max_size: 16

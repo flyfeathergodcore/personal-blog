@@ -1,0 +1,39 @@
+/* 全局主题变量：前台所有组件配色引用这里，后台色彩控制可覆盖 */
+:root {
+  --blog-bg: #ffffff;
+  /* 主页背景图遮罩：半透明主题色压暗/提亮，保证前景文字可读（不能用不透明的 --blog-bg，
+     否则会完全盖住背景图） */
+  --blog-overlay: rgba(255, 255, 255, 0.55);
+  --blog-bg-secondary: #f5f7fa;
+  --blog-card: #ffffff;
+  --blog-text: #303133;
+  --blog-text-secondary: #606266;
+  --blog-border: #e6e6e6;
+  --blog-primary: #409eff;
+  --blog-primary-light: #ecf5ff;
+  --blog-header-bg: rgba(255, 255, 255, 0.85);
+  --blog-radius: 8px;
+  --blog-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+/* 暗色主题：切 html.dark class 生效 */
+html.dark {
+  --blog-bg: #141414;
+  --blog-overlay: rgba(0, 0, 0, 0.5);
+  --blog-bg-secondary: #1d1e1f;
+  --blog-card: #1d1e1f;
+  --blog-text: #e5eaf3;
+  --blog-text-secondary: #a3a6ad;
+  --blog-border: #4c4d4f;
+  --blog-primary: #409eff;
+  --blog-primary-light: rgba(64, 158, 255, 0.15);
+  --blog-header-bg: rgba(20, 20, 20, 0.85);
+  --blog-radius: 8px;
+  --blog-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+/* 页面基础背景：前后台统一铺色 */
+body {
+  background: var(--blog-bg);
+  color: var(--blog-text);
+}

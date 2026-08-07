@@ -1,0 +1,12 @@
+# 会话产物（构建输出文件）
+*.output
+
+# 系统文件
+.DS_Store
+*.swp
+
+# 协程库构建产物（coro/build）
+coro/build/
+
+# superpowers 会话计划文档（本地临时生成）
+docs/

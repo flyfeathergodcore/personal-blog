@@ -1,0 +1,15 @@
+# 构建产物
+build/
+compile_commands.json
+
+# 日志
+logs/
+*.log
+
+# 测试临时产物
+test/certs/*.key
+
+# 编辑器/系统
+.vscode/
+*.swp
+.DS_Store
