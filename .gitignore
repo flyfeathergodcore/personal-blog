@@ -5,6 +5,9 @@
 .DS_Store
 *.swp
 
+# compose 环境变量（局域网 IP 等，避免误传本机信息）
+.env
+
 # 协程库构建产物（coro/build）
 coro/build/
 

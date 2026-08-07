@@ -1,0 +1,50 @@
+# 个人博客一键部署 —— docker compose up -d --build
+#
+# 前提：my-web/dist 已构建（cd my-web && npm install && npm run build）
+#
+# 注意：
+#  - 全新部署：mysql 服务首次启动（数据卷为空）时自动执行 init.sql 建库建表，
+#    数据存命名卷 mysql_data；已有数据卷不会重跑 init.sql，不丢数据。
+#  - 已有部署：若本机已存在同名容器 webcpp-blog / mysql1，先 docker rm -f 同名容器
+#    再执行（旧 mysql1 容器的数据是匿名卷，需自行迁移进 mysql_data）。
+#  - 局域网 IP：默认由后端 WebRTC 实时探测；如需注入可在 .env 设 HOST_LAN_IP。
+#  - 访问者 IP 转发器（lan-proxy.py）保持宿主机运行以记录真实访客 IP：
+#        cd webcpp-engine && python3 lan-proxy.py 8443 127.0.0.1 9443
+#    或用 build-run.sh 全自动处理（构建 + 编排 + 转发器）。
+name: personal-blog
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: mysql1
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: "123456"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      # 首次初始化（数据卷为空）时自动建库建表
+      - ./webcpp-engine/sql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p123456 --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  blog:
+    build:
+      context: .
+      dockerfile: webcpp-engine/Dockerfile
+    image: webcpp-blog-engine
+    container_name: webcpp-blog
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      HOST_LAN_IP: ${HOST_LAN_IP:-}
+    ports:
+      # 内网 9443，对外经宿主机 lan-proxy（0.0.0.0:8443）记录真实访客 IP
+      - "127.0.0.1:9443:8443"
+
+volumes:
+  mysql_data:

@@ -9,9 +9,10 @@
 #   连接池依赖 MySQL 8.0+ 非阻塞客户端 API（mysql_real_connect_nonblocking 等），
 #   Ubuntu 的 libmysqlclient-dev 提供该 API；alpine 只有 mariadb-connector-c 不支持。
 #
-# 构建上下文 = /Users/Zhuanz1/Documents/github
-#   （含 vue-web 仓库整体：mysql_connection_pool + vue-web/webcpp-engine + my-web）
-#   构建：cd my-web && npm run build && docker build ...
+# 构建上下文 = 本仓库根目录（vue-web/personal-blog，含 mysql_connection_pool + coro
+#   + webcpp-engine + my-web 全部源码）
+#   构建：cd my-web && npm run build && docker build -f webcpp-engine/Dockerfile -t ... .
+#   或直接：docker compose up -d --build（见仓库根 docker-compose.yml）
 # ═══════════════════════════════════════════════════════════════════
 
 # ── 阶段 1：C++ 后端 ──
@@ -29,9 +30,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends -o Acquire::Ret
 WORKDIR /src
 # coro 协程库用 vue-web/coro（含 operator co_await，Task 可直接 co_await；
 # 连接池 mysql_connection_pool 用同一份 coro 静态链接，避免 coro TLS 双实例）
-COPY vue-web/mysql_connection_pool/ /src/mysql_connection_pool/
-COPY vue-web/coro/ /src/coro/
-COPY vue-web/webcpp-engine/ /src/webcpp-engine/
+COPY mysql_connection_pool/ /src/mysql_connection_pool/
+COPY coro/ /src/coro/
+COPY webcpp-engine/ /src/webcpp-engine/
 # 关闭在镜像内跑 git 相关的问题：直接 cmake 配置 + 构建 demo_server
 # 必须用 GCC（-fcoroutines ABI）：coro Task 库为 GCC 协程 ABI 设计，clang 标准
 # C++20 ABI 编译通过但运行时 this 传递不兼容（实测 SignalWatcher::wait 崩）。
@@ -55,8 +56,7 @@ WORKDIR /app
 COPY --from=build /src/webcpp-engine/build/demo_server /app/demo_server
 # 前端静态产物（宿主机 npm run build 产出），由网关 doc_root=/app/www 直接 serve，
 # 浏览器同源访问 :8443，/api 无需代理
-# 注意：context 根是 github/，my-web 在 vue-web/ 下，路径需带 vue-web/ 前缀
-COPY vue-web/my-web/dist/ /app/www/
-COPY vue-web/webcpp-engine/config/blog.yaml /app/config.yaml
+COPY my-web/dist/ /app/www/
+COPY webcpp-engine/config/blog.yaml /app/config.yaml
 EXPOSE 8443
 CMD ["./demo_server", "-c", "/app/config.yaml"]

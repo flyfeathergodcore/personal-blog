@@ -5,14 +5,14 @@
 # 用法：在 webcpp-engine 目录下执行 ./build-run.sh
 #   - 先在宿主机构建前端 my-web → dist（复用本机 node，Docker 内不跑 node，
 #     避免拉 node 镜像依赖外网代理）
-#   - 构建镜像 webcpp-blog-engine（context 为上级的 github 根，含连接池源码）
+#   - 构建镜像 webcpp-blog-engine（context 为本仓库根，含连接池 + 协程库源码）
 #   - 后端网关与 MySQL（mysql1 容器）都在 Docker，共处 user-defined 网络 blog-net，
 #     通过容器名 mysql1 互连（默认 bridge 网络不支持容器名 DNS，故必须建自定义网络）
 #   - 前端静态产物由网关 doc_root 直接 serve，浏览器同源访问 http://localhost:8443
 # ═══════════════════════════════════════════════════════════════════
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-GITHUB_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"   # webcpp-engine → vue-web → github
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"   # webcpp-engine → 仓库根（vue-web / personal-blog）
 MYWEB_DIR="$(cd "$SCRIPT_DIR/../my-web" && pwd)"
 
 # ── 跨平台：探测本机局域网 IPv4 ─────────────────────────────────────
@@ -67,8 +67,8 @@ docker exec mysql1 mysql -uroot -p123456 -e \
    GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION; \
    FLUSH PRIVILEGES;" 2>&1 | grep -v "Using a password" || true
 
-echo "==> 构建镜像（context=$GITHUB_DIR）"
-docker build -f "$SCRIPT_DIR/Dockerfile" -t webcpp-blog-engine "$GITHUB_DIR"
+echo "==> 构建镜像（context=$REPO_DIR）"
+docker build -f "$SCRIPT_DIR/Dockerfile" -t webcpp-blog-engine "$REPO_DIR"
 
 echo "==> 重启容器"
 # 宿主机局域网 IP → 注入容器，/api/network/lan 返回它（前端另用 WebRTC 实时覆盖）。
