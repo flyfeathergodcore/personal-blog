@@ -64,6 +64,96 @@ cd webcpp-engine && ./build-run.sh
 > 镜像构建 context 需为仓库的**上级目录**（Dockerfile 的 COPY 路径为 `vue-web/...`），见
 > `webcpp-engine/Dockerfile` 注释。
 
+## 🪟 Windows 部署
+
+> **结论**：Windows 上可正常部署，但有两条硬性约束——
+> ① 后端**只支持 Docker 容器 / WSL2（Linux 内核）方式运行**，不支持原生编译（见文末说明）；
+> ② `build-run.sh` 是 bash 脚本，且局域网 IP 探测用了 **macOS 专用命令**（`route get default` / `ipconfig getifaddr`），
+> 在 Windows / Linux 上需用 Git Bash 或 WSL2 执行，并按下方说明处理 IP 探测。
+
+### 方式一：Docker Desktop + Git Bash（推荐）
+
+1. **安装 [Docker Desktop](https://www.docker.com/products/docker-desktop/)**（启用 WSL2 后端），并安装 [Git for Windows](https://git-scm.com/)（提供 Git Bash）与 Node.js 18+。
+2. **启动 MySQL 容器**（名称 `mysql1`，与后端在同一自定义网络）：
+   ```bash
+   docker run -d --name mysql1 -e MYSQL_ROOT_PASSWORD=123456 mysql:8.0
+   docker network create blog-net
+   docker network connect blog-net mysql1
+   ```
+3. **初始化数据库**（在 Git Bash 中）：
+   ```bash
+   docker exec -i mysql1 mysql -uroot -p123456 < webcpp-engine/sql/init.sql
+   ```
+4. **构建前端**（Windows 原生 npm 即可，无需 WSL）：
+   ```bash
+   cd my-web && npm install && npm run build
+   ```
+5. **一键构建 + 启动**（在 Git Bash 中执行）：
+   ```bash
+   cd webcpp-engine && ./build-run.sh
+   ```
+6. 访问 **http://localhost:8443**，局域网设备访问后台「工作区设置」开启后显示的局域网地址。
+
+> **局域网 IP 探测说明**：`build-run.sh` 里的 IP 探测命令仅 macOS 可用，在 Windows 上会探测失败
+> （不影响部署，开启局域网开关后前端会通过 WebRTC 实时探测本机局域网 IP）。若想让脚本正确
+> 注入 IP，可在 WSL2 里用 Linux 命令替代：
+> ```bash
+> export HOST_LAN_IP="$(hostname -I | awk '{print $1}')"   # WSL2 / Linux 获取局域网 IP
+> cd webcpp-engine && ./build-run.sh
+> ```
+
+### 方式二：WSL2 内直接编译运行（不走 Docker，适合开发）
+
+WSL2 提供完整 Linux 内核，epoll 与 GCC 12 均可用：
+
+```bash
+# 1. 安装编译依赖
+sudo apt update && sudo apt install -y gcc-12 g++-12 cmake \
+  libmysqlclient-dev libssl-dev libyaml-cpp-dev
+
+# 2. 构建前端
+cd my-web && npm install && npm run build
+
+# 3. 准备本地运行配置（基于仓库配置改 doc_root 与 MySQL 地址，需 MySQL 可达）
+cat > webcpp-engine/build/local.yaml <<'EOF'
+server:
+  host: 0.0.0.0
+  port: 8443
+  threads: 4
+  doc_root: /absolute/path/to/my-web/dist
+  log_dir: /tmp/blog-logs
+  log_level: info
+mysql:
+  host: 127.0.0.1
+  port: 3306
+  user: root
+  password: "123456"
+  database: blog_db
+  min_size: 4
+  max_size: 16
+EOF
+
+# 4. 编译后端
+cmake -S webcpp-engine -B webcpp-engine/build \
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-12 \
+  -DCORO_DIR=$(pwd)/coro -DMYSQL_POOL_DIR=$(pwd)/mysql_connection_pool
+cmake --build webcpp-engine/build -j --target demo_server
+
+# 5. 运行
+./webcpp-engine/build/demo_server -c webcpp-engine/build/local.yaml
+```
+
+> 注：MySQL 需让 `127.0.0.1:3306` 可达（如 `docker run -d --name mysql1 -p 3306:3306 -e MYSQL_ROOT_PASSWORD=123456 mysql:8.0`）。
+> WSL2 是 NAT 网络，若要让**局域网设备**直连 WSL 内监听的服务，还需 `netsh interface portproxy` 转发或使用 WSL 镜像网络模式。
+
+### 原生 Windows 编译限制（不建议）
+
+- **事件循环**：`coro` 协程库只有 epoll（Linux）/ kqueue（macOS）实现，**没有 Windows IOCP**，原生编译链接必然失败；
+- **协程 ABI**：后端用 GCC `-fcoroutines` 专用 ABI（Dockerfile 注释明确 MSVC/clang 不兼容），MSVC 无法编译；
+- **系统调用**：依赖 `<sys/epoll.h>` / `<sys/event.h>` 等 POSIX 头文件，Windows 不存在。
+
+前端 `my-web`（Vue/Vite）本身完全跨平台，可在任意平台构建。
+
 ## 📊 性能参考
 
 webcpp-engine 后端与 nginx 1.24 实测对比（4 核 Linux，各 4 worker）：
