@@ -18,6 +18,8 @@ std::atomic<std::size_t> g_next_wait_id{1};
 
 // ---------- PoolWaitAwaiter ----------
 
+// 挂起：登记到池等待队列；池已关闭（登记被拒）则立即唤醒，由 await_resume 抛异常
+// 参数：h - 借用协程句柄，供归还/超时/关闭唤醒
 void connectionpool::PoolWaitAwaiter::await_suspend(std::coroutine_handle<> h) {
     h_ = h;
     if (!pool_->register_waiter(this)) {
@@ -27,6 +29,7 @@ void connectionpool::PoolWaitAwaiter::await_suspend(std::coroutine_handle<> h) {
     }
 }
 
+// 唤醒时返回交接的连接；池已关闭抛 MySQLAsyncError，超时抛 MySQLTimeoutError
 connection* connectionpool::PoolWaitAwaiter::await_resume() {
     // 无锁读 closed_：resume 发生在事件循环栈上，不持池锁；closed_ 为原子
     if (pool_->closed_.load()) {
@@ -42,6 +45,8 @@ connection* connectionpool::PoolWaitAwaiter::await_resume() {
 
 // ---------- connectionpool ----------
 
+// 构造函数：保存连接池配置并钳制参数到合法区间（min_size/max_size/超时）
+// 参数：cfg - 连接池配置
 connectionpool::connectionpool(const Config& cfg)
     : host_(cfg.host), user_(cfg.user), password_(cfg.password), database_(cfg.database),
       min_size_(cfg.min_size), max_size_(cfg.max_size),
@@ -52,10 +57,13 @@ connectionpool::connectionpool(const Config& cfg)
     if (connect_timeout_ms_ <= 0) connect_timeout_ms_ = 1;
 }
 
+// 析构函数：调用 close() 关闭连接池并销毁全部连接
 connectionpool::~connectionpool() {
     close();
 }
 
+// 登记等待者到池等待队列并注册借用超时定时器；池已关闭返回 false（调用方须立即唤醒）
+// 参数：w - 等待者 awaiter（登记后由池持有其指针，唤醒前始终有效）
 bool connectionpool::register_waiter(connectionpool::PoolWaitAwaiter* w) {
     std::lock_guard<std::mutex> lock(mu_);
     if (closed_.load()) {
@@ -68,6 +76,8 @@ bool connectionpool::register_waiter(connectionpool::PoolWaitAwaiter* w) {
     return true;
 }
 
+// 按 id 从等待队列移除等待者（超时唤醒后自我清理，幂等）
+// 参数：id - 等待者登记时分配的 id
 void connectionpool::remove_waiter(std::size_t id) {
     std::lock_guard<std::mutex> lock(mu_);
     for (auto it = waiters_.begin(); it != waiters_.end(); ++it) {
@@ -78,6 +88,8 @@ void connectionpool::remove_waiter(std::size_t id) {
     }
 }
 
+// 借连接：空闲直接给；未到上限锁外新建；满池挂起等待归还/超时（失败抛异常）
+// 返回：可用的 connection 指针
 coro::Task<connection*> connectionpool::async_borrow() {
     // 决策 + 空闲领取/占位在同一把锁内一次完成
     bool need_create = false;
@@ -123,6 +135,8 @@ coro::Task<connection*> connectionpool::async_borrow() {
     co_return co_await w;    // 归还唤醒返回连接；超时/关闭抛异常
 }
 
+// 还连接：有等待者直接交接并锁外唤醒；无等待者放回空闲队列；无效连接销毁补位；池已关闭直接销毁
+// 参数：conn - 待归还的连接
 void connectionpool::release(connection* conn) {
     std::coroutine_handle<> to_resume{};
     {
@@ -173,6 +187,7 @@ void connectionpool::release(connection* conn) {
     if (to_resume) to_resume.resume();   // 锁外唤醒等待者
 }
 
+// 关闭连接池：置关闭标志、取消并唤醒全部等待者（抛异常退出）、销毁全部空闲连接
 void connectionpool::close() {
     std::vector<std::coroutine_handle<>> to_resume;
     {

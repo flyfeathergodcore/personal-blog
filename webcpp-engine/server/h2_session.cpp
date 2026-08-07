@@ -19,6 +19,8 @@
 // Lifecycle
 // ═══════════════════════════════════════════════════════════════
 
+// 构造函数：保存 TLS 流与路由/中间件引用，初始化区域与本地 SETTINGS（含 ENABLE_CONNECT_PROTOCOL）
+// 参数：stream - TLS 连接流；router - 路由表；middleware - 中间件管理器；region_pool - 请求区域池（可空）
 H2Session::H2Session(net::TlsStream stream,
                      Router& router,
                      MiddlewareManager& middleware,
@@ -34,8 +36,12 @@ H2Session::H2Session(net::TlsStream stream,
     local_settings_.enable_connect_protocol = 1;
 }
 
+// 析构函数：默认实现，协程生命周期由 shared_ptr 管理
 H2Session::~H2Session() = default;
 
+// 主协程：HTTP/2 会话生命周期入口。发送 preface → 读数据 → 解析帧 → 分派处理 → 刷输出，
+// 循环直到收到/发送 GOAWAY 或连接关闭
+// 参数：无（基于成员状态）
 // ═══════════════════════════════════════════════════════════════
 // Start — main coroutine
 //
@@ -175,6 +181,8 @@ coro::Task<void> H2Session::Start()
 // Frame dispatch
 // ═══════════════════════════════════════════════════════════════
 
+// 按帧类型分派到对应的处理函数（SETTINGS/HEADERS/DATA/RST_STREAM 等）
+// 参数：hdr - 帧头；payload - 帧负载指针
 void H2Session::ProcessFrame(const H2FrameHeader& hdr, const uint8_t* payload)
 {
     switch (hdr.type) {
@@ -197,6 +205,8 @@ void H2Session::ProcessFrame(const H2FrameHeader& hdr, const uint8_t* payload)
 // SETTINGS (type 4)
 // ═══════════════════════════════════════════════════════════════
 
+// 处理对端 SETTINGS：解码并应用对端参数（并发数/初始窗口/帧长上限），回 SETTINGS ACK
+// 参数：hdr - 帧头；payload - SETTINGS 负载
 void H2Session::OnSettings(const H2FrameHeader& hdr, const uint8_t* payload)
 {
     if (hdr.flags & H2Flags::ACK) {
@@ -237,6 +247,8 @@ void H2Session::OnSettings(const H2FrameHeader& hdr, const uint8_t* payload)
 // HEADERS (type 1)
 // ═══════════════════════════════════════════════════════════════
 
+// 处理 HEADERS 帧：登记流、计算并解码 HPACK 块，END_STREAM 时入队待处理（含 RFC 8441 WS 分支）
+// 参数：hdr - 帧头；payload - 帧负载
 void H2Session::OnHeaders(const H2FrameHeader& hdr, const uint8_t* payload)
 {
     int32_t sid = hdr.stream_id;
@@ -293,6 +305,8 @@ void H2Session::OnHeaders(const H2FrameHeader& hdr, const uint8_t* payload)
 // CONTINUATION (type 9)
 // ═══════════════════════════════════════════════════════════════
 
+// 处理 CONTINUATION 帧：累积 HPACK 块，END_HEADERS 时统一解码
+// 参数：hdr - 帧头；payload - 帧负载
 void H2Session::OnContinuation(const H2FrameHeader& hdr, const uint8_t* payload)
 {
     if (static_cast<int32_t>(hdr.stream_id) != continuation_stream_id_) {
@@ -337,6 +351,8 @@ void H2Session::OnContinuation(const H2FrameHeader& hdr, const uint8_t* payload)
 // DATA (type 0)
 // ═══════════════════════════════════════════════════════════════
 
+// 处理 DATA 帧：累积请求体（或投递到 WS 队列）、做流控、必要时补 WINDOW_UPDATE，END_STREAM 时入队/通知 WS
+// 参数：hdr - 帧头；payload - 帧负载
 void H2Session::OnData(const H2FrameHeader& hdr, const uint8_t* payload)
 {
     int32_t sid = hdr.stream_id;
@@ -407,6 +423,8 @@ void H2Session::OnData(const H2FrameHeader& hdr, const uint8_t* payload)
 // RST_STREAM (type 3)
 // ═══════════════════════════════════════════════════════════════
 
+// 处理 RST_STREAM：关闭流并唤醒 WS 协程（若该流处于 WS 模式）
+// 参数：hdr - 帧头；payload - 帧负载（含错误码）
 void H2Session::OnRstStream(const H2FrameHeader& hdr, const uint8_t* payload)
 {
     int32_t sid = hdr.stream_id;
@@ -428,6 +446,8 @@ void H2Session::OnRstStream(const H2FrameHeader& hdr, const uint8_t* payload)
 // PING (type 6)
 // ═══════════════════════════════════════════════════════════════
 
+// 处理 PING：对非 ACK 帧回显 8 字节负载（PING ACK）
+// 参数：hdr - 帧头；payload - 帧负载
 void H2Session::OnPing(const H2FrameHeader& hdr, const uint8_t* payload)
 {
     // PING ACK must NOT be ACK'd again
@@ -443,6 +463,8 @@ void H2Session::OnPing(const H2FrameHeader& hdr, const uint8_t* payload)
 // GOAWAY (type 7)
 // ═══════════════════════════════════════════════════════════════
 
+// 处理 GOAWAY：标记对端关闭，若本端尚未发送则回 GOAWAY
+// 参数：hdr - 帧头；payload - 帧负载
 void H2Session::OnGoAway(const H2FrameHeader& hdr, const uint8_t* payload)
 {
     if (hdr.length < 8) return;
@@ -460,6 +482,8 @@ void H2Session::OnGoAway(const H2FrameHeader& hdr, const uint8_t* payload)
 // WINDOW_UPDATE (type 8)
 // ═══════════════════════════════════════════════════════════════
 
+// 处理 WINDOW_UPDATE：MVP 仅记录不反应（响应通常落在窗口内）
+// 参数：hdr - 帧头；payload - 帧负载
 void H2Session::OnWindowUpdate(const H2FrameHeader& hdr, const uint8_t* payload)
 {
     // Peer is telling us it has consumed data we sent.
@@ -474,6 +498,8 @@ void H2Session::OnWindowUpdate(const H2FrameHeader& hdr, const uint8_t* payload)
 // PRIORITY (type 2)
 // ═══════════════════════════════════════════════════════════════
 
+// 处理 PRIORITY：忽略优先级（所有流顺序处理）
+// 参数：hdr - 帧头；payload - 帧负载
 void H2Session::OnPriority(const H2FrameHeader& hdr, const uint8_t* payload)
 {
     // We ignore priority — all streams are processed sequentially.
@@ -487,6 +513,8 @@ void H2Session::OnPriority(const H2FrameHeader& hdr, const uint8_t* payload)
 // FlushOutput — drain output_ buffer to socket
 // ═══════════════════════════════════════════════════════════════
 
+// 把 output_ 缓冲写入 socket；用 writing_ 防重入，交换局部缓冲以允许 WS 协程并发追加
+// 参数：无；返回：写入成功与否
 coro::Task<bool> H2Session::FlushOutput()
 {
     if (writing_) co_return true;
@@ -514,6 +542,8 @@ coro::Task<bool> H2Session::FlushOutput()
 // WakeWsStream — 推送侧唤醒挂起等待中的 WS 协程
 // ═══════════════════════════════════════════════════════════════════
 
+// 推送侧唤醒等待中的 WS 协程：取消定时器成功则 post 协程句柄；定时器已到期则不再重复唤醒
+// 参数：ctx - 目标流的上下文（含唤醒引用）
 void H2Session::WakeWsStream(H2StreamContext& ctx)
 {
     if (!ctx.ws_wakeup_.loop || ctx.ws_wakeup_.timer_id == 0) return;
@@ -534,9 +564,13 @@ void H2Session::WakeWsStream(H2StreamContext& ctx)
 
 class H2StreamSink : public StreamSink {
 public:
+    // 构造函数：绑定会话与流 ID，供以 StreamSink 接口写 H2 DATA 帧
+    // 参数：session - 所属 H2 会话；stream_id - 目标流 ID
     H2StreamSink(H2Session& session, int32_t stream_id)
         : session_(session), stream_id_(stream_id) {}
 
+    // 写入一段数据为 DATA 帧并刷出；已结束/失败后返回 false 并置结束标记
+    // 参数：data - 待写入数据；返回：写入成功与否
     coro::Task<bool> Write(std::string_view data) override {
         if (ended_) co_return false;
         session_.WriteData(stream_id_,
@@ -547,6 +581,8 @@ public:
         co_return ok;
     }
 
+    // 结束流：发送带 END_STREAM 的空 DATA 帧并标记结束
+    // 参数：无
     void End() override {
         if (!ended_) {
             session_.WriteData(stream_id_, nullptr, 0, true);  // END_STREAM
@@ -554,6 +590,8 @@ public:
         }
     }
 
+    // 查询流是否已结束
+    // 参数：无；返回：是否结束
     bool IsDisconnected() const override { return ended_; }
 
 private:
@@ -566,6 +604,8 @@ private:
 // ProcessPending — drain the stream pending queue
 // ═══════════════════════════════════════════════════════════════
 
+// 顺序处理流待处理队列：逐条 HandleStream，直到队列清空
+// 参数：无
 coro::Task<void> H2Session::ProcessPending()
 {
     while (stream_mgr_.HasPending()) {
@@ -578,6 +618,8 @@ coro::Task<void> H2Session::ProcessPending()
 // Output helpers
 // ═══════════════════════════════════════════════════════════════
 
+// 追加一条 HEADERS 帧到 output_（HPACK 块已由调用方编码好）
+// 参数：sid - 目标流 ID；hpack - 已编码的 HPACK 块；end_headers - 是否带 END_HEADERS 标志
 void H2Session::WriteHeaders(int32_t sid,
                               const std::vector<uint8_t>& hpack,
                               bool end_headers)
@@ -591,6 +633,8 @@ void H2Session::WriteHeaders(int32_t sid,
         std::memcpy(output_.data() + pos + kFrameHeaderSize, hpack.data(), hpack.size());
 }
 
+// 按对端 SETTINGS_MAX_FRAME_SIZE 把数据切成若干 DATA 帧追加到 output_，END_STREAM 标志落在最后一帧
+// 参数：sid - 目标流 ID；data - 负载指针（可空）；len - 负载长度；end_stream - 是否结束流
 void H2Session::WriteData(int32_t sid, const uint8_t* data, size_t len, bool end_stream)
 {
     // ── 分帧循环：按 peer 的 SETTINGS_MAX_FRAME_SIZE（默认 16384）把 len 切成若干
@@ -621,6 +665,8 @@ void H2Session::WriteData(int32_t sid, const uint8_t* data, size_t len, bool end
     }
 }
 
+// 追加一条 RST_STREAM 帧到 output_，用于中止/关闭流
+// 参数：sid - 目标流 ID；err - 错误码
 void H2Session::WriteRstStream(int32_t sid, H2Error err)
 {
     size_t pos = output_.size();
@@ -630,6 +676,8 @@ void H2Session::WriteRstStream(int32_t sid, H2Error err)
     EncodeRstStream(output_.data() + pos + kFrameHeaderSize, err);
 }
 
+// 追加一条 GOAWAY 帧到 output_，通告对端停止新流
+// 参数：last_sid - 已处理的最后流 ID；err - 错误码
 void H2Session::WriteGoAway(int32_t last_sid, H2Error err)
 {
     size_t pos = output_.size();
@@ -640,6 +688,8 @@ void H2Session::WriteGoAway(int32_t last_sid, H2Error err)
                  {static_cast<uint32_t>(last_sid), err});
 }
 
+// 追加一条 WINDOW_UPDATE 帧到 output_，补充流/连接级接收窗口
+// 参数：sid - 目标流 ID（0 为连接级）；increment - 窗口增量
 void H2Session::WriteWindowUpdate(int32_t sid, uint32_t increment)
 {
     size_t pos = output_.size();
@@ -649,6 +699,8 @@ void H2Session::WriteWindowUpdate(int32_t sid, uint32_t increment)
     EncodeWindowUpdate(output_.data() + pos + kFrameHeaderSize, increment);
 }
 
+// 追加一条 PING ACK 帧到 output_，回应对端 PING
+// 参数：ping - 要回显的 8 字节 opaque 数据
 void H2Session::WritePingAck(const H2Ping& ping)
 {
     size_t pos = output_.size();
@@ -658,6 +710,8 @@ void H2Session::WritePingAck(const H2Ping& ping)
     EncodePing(output_.data() + pos + kFrameHeaderSize, ping);
 }
 
+// 追加一条 SETTINGS ACK 帧到 output_，确认对端 SETTINGS
+// 参数：无
 void H2Session::WriteSettingsAck()
 {
     size_t pos = output_.size();
@@ -670,6 +724,8 @@ void H2Session::WriteSettingsAck()
 // WriteResponseHeaders — HPACK-encode + emit HEADERS frame
 // ═══════════════════════════════════════════════════════════════
 
+// 对响应头做 HPACK 编码并追加 HEADERS 帧（:status + 小写响应头，过滤 hop-by-hop 头）
+// 参数：sid - 目标流 ID；resp - 响应对象
 void H2Session::WriteResponseHeaders(int32_t sid, const Response& resp)
 {
     // Build header list for HPACK encoder.
@@ -715,6 +771,8 @@ void H2Session::WriteResponseHeaders(int32_t sid, const Response& resp)
 //   - WS 并发由 asio::co_spawn 改为 net::spawn(loop_)
 // ═══════════════════════════════════════════════════════════════
 
+// 独立并发运行的 WS 处理器协程：调用 handler 处理 WS 流，结束后清理流与区域状态
+// 参数：h2self - 会话自身（shared_ptr 按值保活）；stream_id - WS 流 ID；conn - H2 WS 连接；ws_handler - WS 处理器
 // WS 处理器协程：原为 HandleStream 内立即调用的 lambda 协程，闭包临时对象在
 // 赋值语句后销毁、协程被 spawn 长期挂起 → 闭包 this/捕获悬垂（GCC 侥幸不崩，
 // clang 严格按标准 use-after-scope）。提为静态成员：h2self/conn 按值
@@ -742,6 +800,8 @@ coro::Task<void> H2Session::RunWsHandler(
     co_return;
 }
 
+// 处理单条 HTTP/2 请求流：中间件→路由→响应，支持 SSE 推送与 RFC 8441 WS 分支；末尾清理流与区域
+// 参数：stream_id - 待处理的流 ID
 coro::Task<void> H2Session::HandleStream(int32_t stream_id)
 {
     auto it = streams_.find(stream_id);

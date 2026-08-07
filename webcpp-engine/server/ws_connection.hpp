@@ -13,6 +13,7 @@
 
 class WsConnectionBase {
 public:
+    // 虚析构函数：默认实现
     virtual ~WsConnectionBase() = default;
 
     /// Read next frame (auto-responds ping/pong, auto-replies close).
@@ -34,6 +35,8 @@ public:
         co_return true;
     }
 
+    // 连接是否仍打开
+    // 参数：无；返回：是否打开
     bool IsOpen() const { return !closed_; }
 
 protected:
@@ -62,9 +65,12 @@ public:
                                : static_cast<int64_t>(idle_timeout_sec) * 1000)
     {}
 
+    // 禁止拷贝（持有底层流引用）
     WsConnection(const WsConnection&) = delete;
     WsConnection& operator=(const WsConnection&) = delete;
 
+    // 读取下一帧：自动应答 Ping/Pong、自动回 Close；连接关闭/超时/读错误时返回 Close-opcode 帧（空 payload）
+    // 参数：无；返回：WsFrame 帧对象
     coro::Task<WsFrame> Read() override
     {
         for (;;)
@@ -121,6 +127,8 @@ public:
         }
     }
 
+    // 发送一帧数据
+    // 参数：opcode - 帧类型；payload - 帧负载；fin - 是否为最终帧
     coro::Task<void> Send(WsOpcode opcode, std::string payload,
                           bool fin = true) override
     {
@@ -128,6 +136,8 @@ public:
         co_return;
     }
 
+    // 发起关闭握手（发送 Close 帧）；已关闭则无操作
+    // 参数：code - 关闭状态码；reason - 关闭原因
     coro::Task<void> Close(uint16_t code = 1000,
                            std::string_view reason = {}) override
     {
@@ -137,6 +147,8 @@ public:
         co_return;
     }
 
+    // 向底层流写原始字节（反向代理透传上游 101 响应时使用）
+    // 参数：data - 原始字节；返回：写入成功与否
     coro::Task<bool> WriteRaw(std::string_view data) override {
         co_return co_await stream_.write_all(data);
     }

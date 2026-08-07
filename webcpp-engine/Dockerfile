@@ -20,7 +20,8 @@ FROM ubuntu:22.04 AS build
 ENV DEBIAN_FRONTEND=noninteractive
 # 清空 buildkit 注入的宿主机代理（host.docker.internal:7890 在容器内连不通），apt 直连
 ENV http_proxy= https_proxy= HTTP_PROXY= HTTPS_PROXY= all_proxy= ALL_PROXY=
-# gcc-12：webcpp 的 coro Task 库是 GCC -fcoroutines ABI（clang 不兼容，会崩）；
+# gcc-12：协程 ABI 必须全工程统一同一编译器——GCC -fcoroutines 与 clang 标准
+# C++20 协程 ABI 互不混链（混链会在运行时崩溃），构建容器固定用 GCC；
 # GCC 11 + -O3 + -fcoroutines 有协程优化卡死 bug，GCC 12 已修复。
 RUN apt-get update && apt-get install -y --no-install-recommends -o Acquire::Retries=3 \
         build-essential cmake pkg-config ca-certificates gcc-12 g++-12 \
@@ -28,21 +29,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends -o Acquire::Ret
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
-# coro 协程库用 vue-web/coro（含 operator co_await，Task 可直接 co_await；
-# 连接池 mysql_connection_pool 用同一份 coro 静态链接，避免 coro TLS 双实例）
+# coro 协程库统一使用 vue-web/coro（连接池、引擎共用同一份，避免 coro
+# EventLoop TLS 双实例）；顶层 CMakeLists 统一编排整体构建
+COPY CMakeLists.txt /src/CMakeLists.txt
 COPY mysql_connection_pool/ /src/mysql_connection_pool/
 COPY coro/ /src/coro/
 COPY webcpp-engine/ /src/webcpp-engine/
 # 关闭在镜像内跑 git 相关的问题：直接 cmake 配置 + 构建 demo_server
-# 必须用 GCC（-fcoroutines ABI）：coro Task 库为 GCC 协程 ABI 设计，clang 标准
-# C++20 ABI 编译通过但运行时 this 传递不兼容（实测 SignalWatcher::wait 崩）。
-# GCC 11 卡死，故用 GCC 12。
-RUN cmake -S webcpp-engine -B webcpp-engine/build \
+# 必须用 GCC（-fcoroutines ABI）：协程 ABI 必须全工程统一——clang 标准 C++20
+# ABI 与 GCC -fcoroutines ABI 互不混链，混链在运行时崩溃。GCC 11 卡死，故用 GCC 12。
+RUN cmake -S . -B build \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_CXX_COMPILER=g++-12 \
-        -DCORO_DIR=/src/coro \
-        -DMYSQL_POOL_DIR=/src/mysql_connection_pool \
-    && cmake --build webcpp-engine/build -j2 --target demo_server
+    && cmake --build build -j2 --target demo_server
 
 FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
@@ -53,7 +52,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends -o Acquire::Ret
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY --from=build /src/webcpp-engine/build/demo_server /app/demo_server
+COPY --from=build /src/build/demo_server /app/demo_server
 # 前端静态产物（宿主机 npm run build 产出），由网关 doc_root=/app/www 直接 serve，
 # 浏览器同源访问 :8443，/api 无需代理
 COPY my-web/dist/ /app/www/

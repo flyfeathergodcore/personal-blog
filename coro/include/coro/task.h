@@ -18,15 +18,20 @@ public:
     struct promise_type {
         // 协程帧统一从内存池分配
         static void* operator new(std::size_t sz) { return FramePool::alloc(sz); }
+        // 释放协程帧（经内存池释放）
         static void operator delete(void* p, std::size_t sz) { FramePool::free(p, sz); }
 
+        // 创建 Task 句柄对象返回给调用方
         Task get_return_object() {
             return Task(std::coroutine_handle<promise_type>::from_promise(*this));
         }
-        std::suspend_always initial_suspend() { return {}; }  // 创建即挂起，需手动/co_await 启动
+        // 创建即挂起，需手动/co_await 启动
+        std::suspend_always initial_suspend() { return {}; }
 
         struct FinalAwaiter {
+            // 总是先挂起，由 await_suspend 统一收尾
             bool await_ready() noexcept { return false; }
+            // 协程结束挂起：恢复父协程（continuation）并投递本帧统一销毁；顶层异常交给 error_handler 兜底
             void await_suspend(std::coroutine_handle<promise_type> self) noexcept {
                 auto& prom = self.promise();
                 auto cont = prom.continuation_;
@@ -47,11 +52,15 @@ public:
                 if (!cont && exc) EventLoop::current().notify_error(exc);
                 EventLoop::current().post_destroy(self);
             }
+            // 恢复后无返回值
             void await_resume() noexcept {}
         };
+        // 最终挂起点：返回 FinalAwaiter 统一收尾
         FinalAwaiter final_suspend() noexcept { return {}; }
 
+        // 协程返回值：保存结果供父协程 await_resume 读取
         void return_value(T v) { result_ = std::move(v); }
+        // 协程体未捕获异常：保存到异常槽供父协程重抛
         void unhandled_exception() { exception_ = std::current_exception(); }
 
         T result_{};
@@ -59,20 +68,26 @@ public:
         std::coroutine_handle<> continuation_ = nullptr;
     };
 
+    // 默认构造：不持有任何协程句柄
     Task() = default;
+    // 由协程句柄构造
     explicit Task(std::coroutine_handle<promise_type> h) : h_(h) {}
     // 析构是 no-op：帧生命周期完全由事件循环管理
     ~Task() = default;
 
+    // 移动构造：转移协程句柄所有权
     Task(Task&& o) noexcept : h_(o.h_) { o.h_ = nullptr; }
+    // 移动赋值：转移协程句柄所有权，处理自赋值
     Task& operator=(Task&& o) noexcept {
         if (this != &o) { h_ = o.h_; o.h_ = nullptr; }
         return *this;
     }
-    Task(const Task&) = delete;
-    Task& operator=(const Task&) = delete;
+    Task(const Task&) = delete;  // 禁止拷贝
+    Task& operator=(const Task&) = delete;  // 禁止拷贝赋值
 
+    // 判断是否持有有效协程句柄
     bool valid() const { return h_ != nullptr; }
+    // 获取底层协程句柄
     std::coroutine_handle<promise_type> handle() const { return h_; }
     // 协程完成后取结果（move）
     T get() { return std::move(h_.promise().result_); }
@@ -89,13 +104,17 @@ public:
         static void* operator new(std::size_t sz) { return FramePool::alloc(sz); }
         static void operator delete(void* p, std::size_t sz) { FramePool::free(p, sz); }
 
+        // 创建 Task 句柄对象返回给调用方
         Task get_return_object() {
             return Task(std::coroutine_handle<promise_type>::from_promise(*this));
         }
+        // 创建即挂起，需手动/co_await 启动
         std::suspend_always initial_suspend() { return {}; }
 
         struct FinalAwaiter {
+            // 总是先挂起，由 await_suspend 统一收尾
             bool await_ready() noexcept { return false; }
+            // 协程结束挂起：恢复父协程并投递本帧统一销毁；顶层异常交给 error_handler 兜底
             void await_suspend(std::coroutine_handle<promise_type> self) noexcept {
                 auto& prom = self.promise();
                 auto cont = prom.continuation_;
@@ -109,30 +128,41 @@ public:
                 if (!cont && exc) EventLoop::current().notify_error(exc);
                 EventLoop::current().post_destroy(self);
             }
+            // 恢复后无返回值
             void await_resume() noexcept {};
         };
+        // 最终挂起点：返回 FinalAwaiter 统一收尾
         FinalAwaiter final_suspend() noexcept { return {}; }
 
+        // 协程正常结束：void 任务无返回值
         void return_void() {}
+        // 协程体未捕获异常：保存到异常槽供父协程重抛
         void unhandled_exception() { exception_ = std::current_exception(); }
 
         std::exception_ptr exception_{};
         std::coroutine_handle<> continuation_ = nullptr;
     };
 
+    // 默认构造：不持有任何协程句柄
     Task() = default;
+    // 由协程句柄构造
     explicit Task(std::coroutine_handle<promise_type> h) : h_(h) {}
+    // 析构是 no-op：帧生命周期完全由事件循环管理
     ~Task() = default;
 
+    // 移动构造：转移协程句柄所有权
     Task(Task&& o) noexcept : h_(o.h_) { o.h_ = nullptr; }
+    // 移动赋值：转移协程句柄所有权，处理自赋值
     Task& operator=(Task&& o) noexcept {
         if (this != &o) { h_ = o.h_; o.h_ = nullptr; }
         return *this;
     }
-    Task(const Task&) = delete;
-    Task& operator=(const Task&) = delete;
+    Task(const Task&) = delete;  // 禁止拷贝
+    Task& operator=(const Task&) = delete;  // 禁止拷贝赋值
 
+    // 判断是否持有有效协程句柄
     bool valid() const { return h_ != nullptr; }
+    // 获取底层协程句柄
     std::coroutine_handle<promise_type> handle() const { return h_; }
 
 private:
@@ -151,13 +181,18 @@ struct AwaitTask {
     using promise_t = typename Task<T>::promise_type;
     std::coroutine_handle<promise_t> h_;
 
+    // 构造函数：拷贝子任务句柄（不持有 Task 引用，避免挂起后悬垂）
     explicit AwaitTask(const Task<T>& t) : h_(t.handle()) {}
 
+    // 子任务已完成则直接就绪（无需挂起）
     bool await_ready() noexcept { return h_.done(); }
+    // 挂起：把父协程注册为子任务 continuation 并启动子任务
+    // 参数：parent - 父协程句柄
     void await_suspend(std::coroutine_handle<> parent) {
         h_.promise().continuation_ = parent;
         h_.resume();  // 启动子任务（initial_suspend 后首次 resume）
     }
+    // 恢复后：子任务有异常则重抛，否则返回结果
     T await_resume() {
         auto& prom = h_.promise();
         if (prom.exception_) std::rethrow_exception(prom.exception_);
@@ -172,13 +207,18 @@ struct AwaitTask<void> {
     using promise_t = typename Task<void>::promise_type;
     std::coroutine_handle<promise_t> h_;
 
+    // 构造函数：拷贝子任务句柄（不持有 Task 引用，避免挂起后悬垂）
     explicit AwaitTask(const Task<void>& t) : h_(t.handle()) {}
 
+    // 子任务已完成则直接就绪（无需挂起）
     bool await_ready() noexcept { return h_.done(); }
+    // 挂起：把父协程注册为子任务 continuation 并启动子任务
+    // 参数：parent - 父协程句柄
     void await_suspend(std::coroutine_handle<> parent) {
         h_.promise().continuation_ = parent;
         h_.resume();  // 启动子任务（initial_suspend 后首次 resume）
     }
+    // 恢复后：子任务有异常则重抛
     void await_resume() {
         auto& prom = h_.promise();
         if (prom.exception_) std::rethrow_exception(prom.exception_);

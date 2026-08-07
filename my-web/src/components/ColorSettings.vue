@@ -63,7 +63,9 @@ try {
   // 忽略损坏数据
 }
 
-// 应用 + 持久化
+/**
+ * 应用色彩覆盖到页面 CSS 变量并持久化到 localStorage
+ */
 const applyColors = () => {
   const record: Record<string, string> = { ...colors }
   applyColorOverrides(record)
@@ -78,8 +80,11 @@ const navBgColor = ref(localStorage.getItem('blogNavBgColor') || '#f0f2f5')
 // 外观重挂载标识：恢复默认时 +1 强制 Appearance 重置为默认值
 const appearanceKey = ref(0)
 
-// 点击「保存设置」：导航栏配色 + 登录页背景图统一持久化。
-// 只有点保存才写入 localStorage，Appearance 不再自动保存
+/**
+ * 保存外观设置：导航栏配色 + 登录页背景图统一持久化；
+ * 只有点保存才写入 localStorage（Appearance 不再自动保存）
+ * @param payload 外观配置（导航栏背景/文字色 + 登录页两张背景图）
+ */
 const handleAppearanceSave = (payload: {
   backgroundColor: string
   textColor: string
@@ -94,7 +99,9 @@ const handleAppearanceSave = (payload: {
   ElMessage.success('外观设置已保存')
 }
 
-// 恢复默认：清除色彩覆盖 + 外观配置
+/**
+ * 恢复默认：清除 CSS 色彩覆盖与外观配置，重挂载 Appearance 恢复默认值
+ */
 const resetColors = () => {
   Object.assign(colors, defaults)
   localStorage.removeItem(COLORS_KEY)

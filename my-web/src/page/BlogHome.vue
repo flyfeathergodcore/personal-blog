@@ -29,6 +29,11 @@ onMounted(initBlogConfig)
 
 // 搜索关键词：Hero 触发后传给 ArticleList 过滤（Task 5 接入）
 const keyword = ref('')
+
+/**
+ * 接收 Hero 搜索事件，更新搜索关键词供文章列表过滤
+ * @param kw 用户输入的搜索关键词
+ */
 const handleSearch = (kw: string) => {
   keyword.value = kw
 }

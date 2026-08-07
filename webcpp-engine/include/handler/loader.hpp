@@ -16,7 +16,9 @@ class Router;
 // ═══════════════════════════════════════════════════════════════════
 class HandlerLoader {
 public:
+    // 构造加载器（无资源初始化）
     HandlerLoader() = default;
+    // 析构时卸载所有已加载的 .so
     ~HandlerLoader();
 
     HandlerLoader(const HandlerLoader&) = delete;

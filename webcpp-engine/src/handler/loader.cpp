@@ -6,11 +6,14 @@
 // ── register_routes 签名的函数指针类型 ──
 using RegisterFunc = void (*)(Router&);
 
+// 析构：卸载所有已加载的动态库
 HandlerLoader::~HandlerLoader()
 {
     UnloadAll();
 }
 
+// 加载指定目录下全部 .so 插件：dlopen + dlsym(register_routes) 并注册路由到 router
+// 参数：dir - 插件目录（不存在则返回 0）；router - 路由注册目标；返回成功加载数量
 size_t HandlerLoader::LoadAll(const std::string& dir, Router& router)
 {
     namespace fs = std::filesystem;
@@ -60,6 +63,7 @@ size_t HandlerLoader::LoadAll(const std::string& dir, Router& router)
     return count;
 }
 
+// 卸载全部已加载的动态库并清空句柄列表
 void HandlerLoader::UnloadAll()
 {
     for (auto& lib : libs_) {

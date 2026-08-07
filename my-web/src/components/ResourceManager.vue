@@ -65,15 +65,20 @@ const resources = ref<Resource[]>([])
 const uploading = ref(false)
 const progress = ref(0)
 
+/**
+ * 拉取资源列表并过滤出图片/视频（md 文档等非媒体资源不在此管理）
+ */
 const fetchData = async () => {
-  // 资源管理只关注图片/视频：过滤掉 md 文档等非媒体资源
   const all = await getResources()
   resources.value = all.filter(
     (r) => r.type === 'image' || r.type === 'video'
   )
 }
 
-// 上传图片/视频：带进度条与明确错误提示（避免后端失败时静默无反馈）
+/**
+ * 上传图片/视频：带进度条与明确错误提示（避免后端失败时静默无反馈）
+ * @param options el-upload 的请求配置（含文件与回调）
+ */
 const handleUpload = async (options: UploadRequestOptions) => {
   uploading.value = true
   progress.value = 0
@@ -94,7 +99,10 @@ const handleUpload = async (options: UploadRequestOptions) => {
   }
 }
 
-// 复制地址：列表不含 url，先按 id 拉取完整地址再复制
+/**
+ * 复制资源地址到剪贴板：列表不含 url，先按 id 拉取完整地址再复制
+ * @param r 资源对象
+ */
 const copyUrl = async (r: Resource) => {
   const url = await getResourceUrl(r.id)
   if (!url) {
@@ -105,6 +113,10 @@ const copyUrl = async (r: Resource) => {
   ElMessage.success('地址已复制')
 }
 
+/**
+ * 删除资源并刷新列表
+ * @param id 资源 id
+ */
 const handleDelete = async (id: string) => {
   await deleteResource(id)
   ElMessage.success('资源已删除')

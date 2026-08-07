@@ -13,11 +13,14 @@ namespace {
 std::mutex g_pool_mu;
 }  // namespace
 
+// 获取内存池单例（首次调用时构造）
 FramePool& FramePool::instance() {
     static FramePool pool;
     return pool;
 }
 
+// 分配至少 size 字节的内存（协程帧）；优先走分桶 free list，超大块直接 malloc
+// 参数：size - 需要的字节数；返回：内存指针（失败为 nullptr）
 void* FramePool::alloc(std::size_t size) {
     // 找最小够用的桶
     for (int i = 0; i < kNumBuckets; ++i) {
@@ -50,6 +53,8 @@ void* FramePool::alloc(std::size_t size) {
     return reinterpret_cast<char*>(bh) + sizeof(BlockHeader);
 }
 
+// 释放由 alloc 分配的内存（经头记录区分池块与大块）
+// 参数：ptr - 待释放指针；size - 原始分配大小（可忽略）
 void FramePool::free(void* ptr, std::size_t /*size*/) {
     if (!ptr) return;
     BlockHeader* b = reinterpret_cast<BlockHeader*>(
@@ -75,6 +80,7 @@ void FramePool::free(void* ptr, std::size_t /*size*/) {
     std::free(ptr);
 }
 
+// 测试用：返回当前活跃（未释放）的池内块数；>4KB 大块不计入
 std::size_t FramePool::live_blocks() {
     std::lock_guard<std::mutex> lock(g_pool_mu);
     return instance().live_;

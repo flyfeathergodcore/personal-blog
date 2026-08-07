@@ -8,8 +8,9 @@ import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 import router from './router'
 import { blogConfigState, initBlogConfig } from './composables/useBlogConfig'
 
-// 浏览器标签页标题跟随站点名：不再使用 Vite 默认标题，
-// 以后台「站点设置 → 站点名称」为准，改配置后同步更新
+/**
+ * 同步浏览器标签页标题为站点名（读取全局站点配置，无配置时回退默认标题）
+ */
 const applyTitle = () => {
   document.title = blogConfigState.siteName || 'My Blog'
 }

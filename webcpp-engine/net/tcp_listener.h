@@ -13,8 +13,10 @@ namespace net {
 
 class TcpListener {
 public:
-    TcpListener() = default;
+    TcpListener() = default;               // 默认构造：fd_=-1，未监听
+    // 析构：关闭监听 fd
     ~TcpListener();                        // 析构关闭 fd
+    // 禁止拷贝
     TcpListener(const TcpListener&) = delete;
     TcpListener& operator=(const TcpListener&) = delete;
 
@@ -27,7 +29,9 @@ public:
     // 成功返回 IoResult{0, None}（无数据负载，ok()==true）。
     coro::Task<IoResult> accept(TcpStream& out, int64_t timeout_ms = -1);
 
+    // 关闭监听 fd（幂等）
     void close();                          // 幂等
+    // 返回监听 fd（未监听为 -1）
     int  fd() const { return fd_; }
 private:
     int fd_ = -1;

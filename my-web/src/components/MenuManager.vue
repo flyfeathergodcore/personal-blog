@@ -53,31 +53,46 @@ import {
 // 本地编辑副本（深拷贝自存储/默认值）
 const menus = ref<MenuNode[]>(loadMenusRaw())
 
-// 添加分组
+/**
+ * 添加一个分组（含默认图标与空子项）
+ */
 const addGroup = () => {
   menus.value.push({ label: '新分组', index: '', icon: 'Setting', children: [] })
 }
 
-// 删除分组
+/**
+ * 删除指定下标的分组
+ * @param gi 分组下标
+ */
 const removeGroup = (gi: number) => {
   menus.value.splice(gi, 1)
 }
 
-// 分组下添加子项
+/**
+ * 在指定分组下添加一个子项
+ * @param gi 分组下标
+ */
 const addChild = (gi: number) => {
   const group = menus.value[gi]
   if (!group) return
   group.children.push({ label: '新子项', index: '', icon: 'Document', children: [] })
 }
 
-// 删除子项
+/**
+ * 删除指定分组下的指定子项
+ * @param gi 分组下标
+ * @param ci 子项下标
+ */
 const removeChild = (gi: number, ci: number) => {
   const group = menus.value[gi]
   if (!group) return
   group.children.splice(ci, 1)
 }
 
-// 校验：所有分组与子项的 index 必须非空（侧边栏点击靠 index 匹配面板）
+/**
+ * 校验所有分组与子项的 index 是否非空（侧边栏点击靠 index 匹配面板）
+ * @returns 校验失败时的错误提示；全部通过返回 null
+ */
 const validateIndexes = (): string | null => {
   for (const g of menus.value) {
     if (!g.index.trim()) return `分组「${g.label || '(未命名)'}」缺少 index`
@@ -88,7 +103,9 @@ const validateIndexes = (): string | null => {
   return null
 }
 
-// 保存：写入 localStorage，后台刷新后侧边栏生效
+/**
+ * 保存菜单：先校验 index，通过后写入 localStorage（后台刷新后侧边栏生效）
+ */
 const save = () => {
   const err = validateIndexes()
   if (err) {
@@ -99,7 +116,9 @@ const save = () => {
   ElMessage.success('菜单已保存，刷新后台生效')
 }
 
-// 重置为默认菜单（需再点保存才写入）
+/**
+ * 重置为默认菜单（需再点「保存菜单」才写入）
+ */
 const reset = () => {
   menus.value = JSON.parse(JSON.stringify(DEFAULT_SIDEBAR_MENUS)) as MenuNode[]
   ElMessage.success('已恢复默认菜单，点「保存菜单」生效')

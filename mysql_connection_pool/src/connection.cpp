@@ -8,12 +8,16 @@
 #include <cstring>
 #include <string>
 
+// 构造函数：初始化连接句柄为空
 connection::connection() : conn_(nullptr) {}
 
+// 析构函数：关闭并释放数据库连接
 connection::~connection() {
     close();
 }
 
+// 同步连接数据库；失败返回 false
+// 参数：host - 主机名；user - 用户名；password - 密码；database - 数据库名
 bool connection::connect(const char* host, const char* user, const char* password, const char* database) {
     conn_ = mysql_init(nullptr);
     if (!conn_) {
@@ -27,10 +31,13 @@ bool connection::connect(const char* host, const char* user, const char* passwor
     return true;
 }
 
+// 检查当前是否已连接
 bool connection::is_connected() const {
     return conn_ != nullptr;
 }
 
+// 同步执行更新操作（INSERT/UPDATE/DELETE）；失败返回 false
+// 参数：query - SQL 语句
 bool connection::update(const char* query) {
     if (!conn_) {
         return false;
@@ -41,6 +48,8 @@ bool connection::update(const char* query) {
     return true;
 }
 
+// 同步执行查询操作（SELECT），结果存入 *result（调用方负责 mysql_free_result）；失败返回 false
+// 参数：query - SQL 语句；result - 输出参数，结果集指针
 bool connection::query(const char* query, MYSQL_RES** result) {
     if (!conn_) {
         return false;
@@ -52,6 +61,7 @@ bool connection::query(const char* query, MYSQL_RES** result) {
     return true;
 }
 
+// 关闭数据库连接；成功关闭返回 true
 bool connection::close() {
     if (conn_) {
         mysql_close(conn_);
@@ -69,6 +79,8 @@ static int64_t remain_ms(const std::chrono::steady_clock::time_point& deadline) 
     return duration_cast<milliseconds>(deadline - steady_clock::now()).count();
 }
 
+// 异步连接数据库（非阻塞状态机推进）；总超时后抛 MySQLTimeoutError，失败抛 MySQLAsyncError
+// 参数：host - 主机名；user - 用户名；password - 密码；database - 数据库名；timeout_ms - 总超时毫秒数
 coro::Task<void> connection::async_connect(const char* host, const char* user,
                                            const char* password, const char* database,
                                            int64_t timeout_ms) {
@@ -142,6 +154,9 @@ static coro::Task<void> send_query_st(MYSQL* m, int fd, const char* sql,
     }
 }
 
+// 异步查询（SELECT）：发送查询并读取结果集；总超时后抛 MySQLTimeoutError，网络类错误置连接无效
+// 参数：sql - SQL 语句；timeout_ms - 总超时毫秒数
+// 返回：结果集指针（调用方负责 mysql_free_result）
 coro::Task<MYSQL_RES*> connection::async_query(const char* sql, int64_t timeout_ms) {
     using namespace std::chrono;
     if (!conn_) {
@@ -183,6 +198,9 @@ coro::Task<MYSQL_RES*> connection::async_query(const char* sql, int64_t timeout_
     co_return res;
 }
 
+// 异步更新（INSERT/UPDATE/DELETE）：发送查询并返回影响行数；总超时后抛 MySQLTimeoutError
+// 参数：sql - SQL 语句；timeout_ms - 总超时毫秒数
+// 返回：受影响行数
 coro::Task<uint64_t> connection::async_update(const char* sql, int64_t timeout_ms) {
     using namespace std::chrono;
     if (!conn_) {

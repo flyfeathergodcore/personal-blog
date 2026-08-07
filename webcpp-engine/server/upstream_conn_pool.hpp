@@ -23,6 +23,8 @@ public:
     struct Conn {
         net::TcpStream socket;
         std::chrono::steady_clock::time_point last_used;
+        // socket 是否仍打开
+        // 参数：无；返回：是否打开
         bool is_open() const { return socket.is_open(); }
     };
 
@@ -42,12 +44,17 @@ public:
     size_t IdleCount() const;
 
 private:
+    // 私有构造函数（线程局部单例，禁止外部构造）
     UpstreamConnPool() = default;
+    // 析构函数：关闭所有空闲连接
     ~UpstreamConnPool();
 
+    // 禁止拷贝/赋值（线程局部单例）
     UpstreamConnPool(const UpstreamConnPool&) = delete;
     UpstreamConnPool& operator=(const UpstreamConnPool&) = delete;
 
+    // 淘汰过期/失效的空闲连接
+    // 参数：无
     void EvictStale();
 
     struct Entry {

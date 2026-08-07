@@ -19,6 +19,8 @@
 
 /// Relay frames from `from` to `to`.
 /// When a Close frame is received, it is forwarded and the relay stops.
+/// 单向中继帧：从 from 读到 to；收到 Close 帧转发后停止；cancel_flag 置位则退出
+/// 参数：from - 读取侧流；to - 写入侧流；mask_to - 转发时是否重新加掩码；cancel_flag - 取消标志（跨协程）
 template<typename FromStream, typename ToStream>
 coro::Task<void> WsRelayDirectional(
     FromStream& from, ToStream& to,

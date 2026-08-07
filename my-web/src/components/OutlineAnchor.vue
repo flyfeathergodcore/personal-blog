@@ -22,8 +22,11 @@
 import { computed, type PropType } from 'vue'
 import type { AnchorItem } from './MdViewer.vue'
 
-// 点击锚点链接：capture 阶段拦截默认跳转（hash 路由下 #id 会被 Vue Router 吞掉导致空白页），
-// 改为手动滚动到对应标题；标题带 scroll-margin-top 避开吸顶导航
+/**
+ * 点击锚点链接：capture 阶段拦截默认跳转（hash 路由下 #id 会被 Vue Router 吞掉导致空白页），
+ * 改为手动滚动到对应标题；标题带 scroll-margin-top 避开吸顶导航
+ * @param e 鼠标事件
+ */
 const handleClick = (e: MouseEvent) => {
   const link = (e.target as HTMLElement | null)?.closest?.('a[href^="#"]')
   if (!link) return
@@ -52,7 +55,9 @@ const props = defineProps({
   }
 })
 
-// 线性锚点 -> 层级树：h1/h2 作为一级，h3 及以下挂到最近一个一级下
+/**
+ * 线性锚点转层级树：h1/h2 作为一级，h3 及以下挂到最近一个一级节点下（无一级则忽略）
+ */
 const tree = computed<TreeNode[]>(() => {
   const result: TreeNode[] = []
   let lastTop: TreeNode | null = null

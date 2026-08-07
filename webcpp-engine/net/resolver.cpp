@@ -2,6 +2,7 @@
 // resolve 把候选地址格式化为 Endpoint 列表；connect 在事件循环上做非阻塞
 // 多地址遍历，任一地址握手成功即返回，全部失败/超时返回 nullptr。
 #include "net/resolver.h"
+#include "net/socket_util.h"
 
 #include <cerrno>
 #include <netdb.h>
@@ -13,6 +14,8 @@
 
 namespace net {
 
+// 解析主机名/端口为全部候选端点（getaddrinfo，AF_UNSPEC + SOCK_STREAM）
+// 参数：host - 主机名或 IP；port - 端口。返回 Endpoint 列表（失败时为空）
 std::vector<Endpoint> resolve(std::string_view host, uint16_t port) {
     std::vector<Endpoint> out;
     addrinfo hints{};
@@ -40,6 +43,8 @@ std::vector<Endpoint> resolve(std::string_view host, uint16_t port) {
     return out;
 }
 
+// 非阻塞 TCP 连接：遍历候选地址逐个尝试，任一握手成功即返回；全部失败/超时返回 nullptr
+// 参数：host - 主机名或 IP；port - 端口；timeout_ms - 单次连接等待超时（毫秒，<0 无限）
 coro::Task<std::unique_ptr<TcpStream>> connect(std::string_view host, uint16_t port,
                                                int64_t timeout_ms) {
     addrinfo hints{};
@@ -50,9 +55,8 @@ coro::Task<std::unique_ptr<TcpStream>> connect(std::string_view host, uint16_t p
     if (getaddrinfo(std::string(host).c_str(), port_s.c_str(), &hints, &res) != 0)
         co_return nullptr;
     for (addrinfo* ai = res; ai; ai = ai->ai_next) {
-        int fd = ::socket(ai->ai_family,
-                          ai->ai_socktype | SOCK_NONBLOCK | SOCK_CLOEXEC,
-                          ai->ai_protocol);
+        int fd = SocketNonBlockCloexec(ai->ai_family, ai->ai_socktype,
+                                       ai->ai_protocol);
         if (fd < 0) continue;
         int rc = ::connect(fd, ai->ai_addr, ai->ai_addrlen);
         if (rc == 0) {

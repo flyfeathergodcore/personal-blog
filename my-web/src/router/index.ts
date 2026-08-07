@@ -24,7 +24,11 @@ const router = createRouter({
 // 登录 token 存储键（与 LoginView / HomeView 退出逻辑共用）
 const TOKEN_KEY = 'blog_token'
 
-// 全局前置守卫：后台需登录，未登录重定向登录页（带 redirect 回跳）；已登录访问登录页则进后台
+/**
+ * 全局前置守卫：后台路由需登录，未登录重定向登录页（带 redirect 回跳）；已登录访问登录页则进后台
+ * @param to 目标路由对象
+ * @returns 放行返回 true，或重定向到登录页 / 后台首页
+ */
 router.beforeEach((to) => {
   const hasToken = !!localStorage.getItem(TOKEN_KEY)
   if (to.meta.requiresAuth && !hasToken) {

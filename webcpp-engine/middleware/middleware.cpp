@@ -11,6 +11,8 @@
 // MiddlewareManager
 // ═══════════════════════════════════════════════════════════════
 
+// 添加中间件：按类型挂入 pre_/post_ 链表，并接管其生命周期
+// 参数：mw - 待添加的中间件（独占所有权）
 void MiddlewareManager::Add(std::unique_ptr<Middleware> mw)
 {
     auto type = mw->GetType();
@@ -27,6 +29,8 @@ void MiddlewareManager::Add(std::unique_ptr<Middleware> mw)
     owned_.push_back(std::move(mw));
 }
 
+// 原始字节阶段处理：遍历各中间件 OnRawData，任一返回有效响应即短路
+// 参数：data - 原始请求字节；len - 字节长度
 Response MiddlewareManager::ProcessRaw(const char* data, size_t len)
 {
     for (auto* mw : pre_) {
@@ -40,6 +44,8 @@ Response MiddlewareManager::ProcessRaw(const char* data, size_t len)
     return Response::None();
 }
 
+// 串行运行所有 PreRequest 中间件；返回 None 表示继续执行 handler
+// 参数：ctx - 请求上下文（中间件可修改）
 Response MiddlewareManager::ExecutePre(Context& ctx)
 {
     for (auto* mw : pre_) {
@@ -50,6 +56,8 @@ Response MiddlewareManager::ExecutePre(Context& ctx)
     return Response::None();
 }
 
+// 异步串行运行所有 PostResponse 中间件
+// 参数：ctx - 请求上下文；status_code - 状态码；bytes_sent - 响应字节数；elapsed_us - 请求总耗时（微秒）；worker_id - worker ID
 coro::Task<void> MiddlewareManager::ExecutePost(
     const Context& ctx, int status_code,
     size_t bytes_sent, uint64_t elapsed_us, int worker_id)
@@ -60,6 +68,8 @@ coro::Task<void> MiddlewareManager::ExecutePost(
     co_return;
 }
 
+// 同步串行运行所有 PostResponse 中间件（零协程帧开销）
+// 参数：ctx - 请求上下文；status_code - 状态码；bytes_sent - 响应字节数；elapsed_us - 请求总耗时（微秒）；worker_id - worker ID
 void MiddlewareManager::ExecutePostSync(
     const Context& ctx, int status_code,
     size_t bytes_sent, uint64_t elapsed_us, int worker_id)
@@ -73,6 +83,8 @@ void MiddlewareManager::ExecutePostSync(
 // CORSMiddleware
 // ═══════════════════════════════════════════════════════════════
 
+// CORS 预检处理：OPTIONS 直接返回 204，其余注入跨域响应头
+// 参数：ctx - 请求上下文
 Response CORSMiddleware::HandlePre(Context& ctx)
 {
     if (ctx.Method() == "OPTIONS") {
@@ -97,6 +109,8 @@ Response CORSMiddleware::HandlePre(Context& ctx)
 // RequestIdMiddleware — X-Request-Id forwarding / generation
 // ═══════════════════════════════════════════════════════════════
 
+// 生成短请求 ID（线程本地计数器 + 线程 ID），写入 pool 避免堆分配
+// 参数：pool - 会话区域，用于存放 ID 字符串；返回指向 pool 内 ID 的视图
 std::string_view RequestIdMiddleware::GenerateId(SessionRegion& pool)
 {
     thread_local static uint64_t counter = 0;
@@ -110,6 +124,8 @@ std::string_view RequestIdMiddleware::GenerateId(SessionRegion& pool)
     return pool.ToView(off);
 }
 
+// 转发或生成 X-Request-Id，并注入请求上下文与响应头
+// 参数：ctx - 请求上下文
 Response RequestIdMiddleware::HandlePre(Context& ctx)
 {
     auto existing = ctx.Header("x-request-id");
@@ -131,6 +147,8 @@ Response RequestIdMiddleware::HandlePre(Context& ctx)
 // LoggingMiddleware — structured JSON log
 // ═══════════════════════════════════════════════════════════════
 
+// 生成日志时间戳（UTC，按秒缓存），写入 pool 避免堆分配
+// 参数：pool - 会话区域，用于存放时间戳字符串
 static std::string_view LogTimestamp(SessionRegion& pool)
 {
     static time_t last = 0;
@@ -147,6 +165,8 @@ static std::string_view LogTimestamp(SessionRegion& pool)
     return pool.ToView(off);
 }
 
+// 同步后置处理：构建结构化 JSON 访问日志并写入网关日志
+// 参数：ctx - 请求上下文；status_code - 状态码；bytes_sent - 响应字节数；elapsed_us - 请求耗时（微秒）；worker_id - 预留，未使用
 void LoggingMiddleware::HandlePostSync(
     const Context& ctx,
     int status_code,
@@ -196,6 +216,8 @@ void LoggingMiddleware::HandlePostSync(
         status_code, elapsed_us);
 }
 
+// 异步后置处理：委托给同步实现
+// 参数：ctx - 请求上下文；status_code - 状态码；bytes_sent - 响应字节数；elapsed_us - 请求耗时（微秒）；worker_id - worker ID
 coro::Task<void> LoggingMiddleware::HandlePost(
     const Context& ctx,
     int status_code,
@@ -211,6 +233,8 @@ coro::Task<void> LoggingMiddleware::HandlePost(
 // MetricsMiddleware
 // ═══════════════════════════════════════════════════════════════
 
+// PreRequest：拦截 /metrics.json、/dashboard、/metrics/stream 等指标端点
+// 参数：ctx - 请求上下文
 Response MetricsMiddleware::HandlePre(Context& ctx)
 {
     auto path = ctx.Path();
@@ -256,6 +280,8 @@ Response MetricsMiddleware::HandlePre(Context& ctx)
     return Response::None();
 }
 
+// 同步后置处理：把本次请求指标上报到 MetricsCollector
+// 参数：ctx - 请求上下文；status_code - 状态码；bytes_sent - 响应字节数；elapsed_us - 请求耗时（微秒）；worker_id - worker ID
 void MetricsMiddleware::HandlePostSync(
     const Context& ctx,
     int status_code,
@@ -268,6 +294,8 @@ void MetricsMiddleware::HandlePostSync(
                                ctx.IsHttp2());
 }
 
+// 异步后置处理：委托给同步实现
+// 参数：ctx - 请求上下文；status_code - 状态码；bytes_sent - 响应字节数；elapsed_us - 请求耗时（微秒）；worker_id - worker ID
 coro::Task<void> MetricsMiddleware::HandlePost(
     const Context& ctx,
     int status_code,

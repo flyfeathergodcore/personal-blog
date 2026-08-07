@@ -24,16 +24,22 @@ class Router;
 
 class HotReloader {
 public:
+    // 构造热重载器
+    // 参数：watch_dirs - 要监控的 .so 目录列表；router - 热更新时写入路由的目标 Router
     HotReloader(std::vector<std::string> watch_dirs, Router& router);
+    // 析构时停止后台线程并清理资源
     ~HotReloader();
 
     HotReloader(const HotReloader&) = delete;
     HotReloader& operator=(const HotReloader&) = delete;
 
+    // 启动后台监控线程
     void Start();
+    // 停止后台监控线程
     void Stop();
 
 private:
+    // 后台线程主循环：轮询目录，检测 .so 变化并触发重载
     void WatchLoop();
 
     struct LoadedSo {
@@ -51,5 +57,7 @@ private:
     std::unordered_map<std::string, LoadedSo> loaded_;
     std::vector<void*> stale_handles_;  // 旧 .so，保持打开直到进程退出
 
+    // 重载单个 .so：dlopen 新版本并调用 register_routes 更新路由
+    // 参数：path - .so 文件路径
     void Reload(const std::string& path);
 };

@@ -70,6 +70,7 @@ namespace {
 // ═══════════════════════════════════════════════════════════════════
 
 // 写入 JSON 字符串转义（UTF-8 原样透传；控制字符 \uXXXX；引号/反斜杠/换行转义）
+// 参数：out - 转义结果追加写入的目标字符串；s - 待转义的原始字符串
 void JsonEscape(std::string& out, std::string_view s) {
     for (char ch : s) {
         switch (ch) {
@@ -91,7 +92,8 @@ void JsonEscape(std::string& out, std::string_view s) {
     }
 }
 
-// 返回一个 JSON 字符串字面量（含引号）
+// 返回一个 JSON 字符串字面量（含引号，内容已转义）
+// 参数：s - 原始字符串
 std::string JsonStr(std::string_view s) {
     std::string o;
     o.reserve(s.size() + 2);
@@ -101,9 +103,9 @@ std::string JsonStr(std::string_view s) {
     return o;
 }
 
-// 从 JSON 对象 body 中提取 "key":"value" 的 value（已解转义）。
-// 支持 JSON 转义（\" \\ \/ \b \f \n \r \t \uXXXX）——前端 JSON.stringify
-// 会把 content 里的换行/引号转义，必须正确处理，否则多行内容提取错位。
+// 从 JSON 对象 body 中提取指定 key 的 value（支持 JSON 转义解转义，
+// 前端 JSON.stringify 会把换行/引号转义，必须正确处理否则提取错位）
+// 参数：body - JSON 对象字符串；key - 待提取的字段名
 std::string JsonField(std::string_view body, std::string_view key) {
     const std::string needle = "\"" + std::string(key) + "\"";
     auto p = body.find(needle);
@@ -174,6 +176,7 @@ std::string JsonField(std::string_view body, std::string_view key) {
 }
 
 // 从 JSON 对象 body 中提取数组字段 ["a","b"] → 逗号分隔字符串 "a,b"（存库用）
+// 参数：body - JSON 对象字符串；key - 数组字段名
 std::string JsonArrayToCsv(std::string_view body, std::string_view key) {
     const std::string needle = "\"" + std::string(key) + "\"";
     auto p = body.find(needle);
@@ -201,6 +204,7 @@ std::string JsonArrayToCsv(std::string_view body, std::string_view key) {
 }
 
 // 逗号分隔字符串 → JSON 数组（["a","b"]）
+// 参数：tags - 逗号分隔的标签字符串
 std::string TagsToJson(std::string_view tags) {
     std::string o = "[";
     bool first = true;
@@ -219,7 +223,8 @@ std::string TagsToJson(std::string_view tags) {
     return o;
 }
 
-// 百分号解码（query 参数中文字符会被浏览器/前端 encodeURIComponent）
+// 百分号解码（query 参数中文字符会被浏览器/前端 encodeURIComponent 编码）
+// 参数：s - 含百分号编码的字符串
 std::string PercentDecode(std::string_view s) {
     std::string o;
     o.reserve(s.size());
@@ -252,6 +257,8 @@ std::string PercentDecode(std::string_view s) {
 // 与 EventLoop 析构的先后问题（connectionpool::close 内部会调 current()）。
 thread_local connectionpool* t_pool = nullptr;
 
+// 获取当前 worker 线程的 MySQL 连接池（thread_local 懒创建）
+// 参数：cfg - MySQL 连接配置（host/user/password/database/池大小）
 connectionpool* GetPool(const MysqlConfig& cfg) {
     if (!t_pool) {
         connectionpool::Config pc;
@@ -269,7 +276,10 @@ connectionpool* GetPool(const MysqlConfig& cfg) {
 // 借用 RAII guard：析构时自动归还连接（异常安全）
 class ConnGuard {
 public:
+    // 构造：绑定待借还的连接池
+    // 参数：pool - 所属连接池
     explicit ConnGuard(connectionpool* pool) : pool_(pool) {}
+    // 析构：自动归还持有的连接（异常安全）
     ~ConnGuard() { if (c_) pool_->release(c_); }
     ConnGuard(const ConnGuard&) = delete;
     ConnGuard& operator=(const ConnGuard&) = delete;
@@ -280,6 +290,7 @@ public:
         c_ = co_await coro::AwaitTask<connection*>{pool_->async_borrow()};
         co_return c_ != nullptr;
     }
+    // 获取已借出的原生连接指针（borrow 成功后可调用 raw()/async_query 等）
     connection* get() const { return c_; }
 
 private:
@@ -288,6 +299,7 @@ private:
 };
 
 // SQL 字符串转义（用 mysql_real_escape_string，按当前 session 的 sql_mode 正确处理反斜杠）
+// 参数：conn - MySQL 连接（conn 为 null 时原样返回）；s - 待转义字符串
 std::string SqlEscape(MYSQL* conn, std::string_view s) {
     if (!conn) return std::string(s);
     std::string o(2 * s.size() + 1, '\0');
@@ -308,6 +320,7 @@ struct MultipartFile {
 };
 
 // 解析 multipart/form-data body，取出第一个文件字段（filename / mime / 二进制）
+// 参数：body - 请求体原始字节；content_type - Content-Type 头（含 boundary）
 MultipartFile ParseMultipart(std::string_view body, std::string_view content_type) {
     MultipartFile f;
     auto bp = content_type.find("boundary=");
@@ -357,6 +370,7 @@ MultipartFile ParseMultipart(std::string_view body, std::string_view content_typ
 }
 
 // base64 编码（图片转 data URL 存库）
+// 参数：in - 待编码的二进制数据
 std::string Base64Encode(const std::string& in) {
     static const char* kTable =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -389,6 +403,7 @@ std::string Base64Encode(const std::string& in) {
 }
 
 // base64 解码（用于把 data URL 还原成二进制文件，供图片/视频按 id 读取）
+// 参数：in - base64 编码字符串
 std::string Base64Decode(const std::string& in) {
     auto val = [](char c) -> int {
         if (c >= 'A' && c <= 'Z') return c - 'A';
@@ -422,6 +437,7 @@ std::string Base64Decode(const std::string& in) {
 
 // 按固定列序（SELECT *）：0 id,1 title,2 summary,3 category,4 tags,
 // 5 date,6 cover,7 author,8 content,9 file_url
+// 参数：row - mysql_fetch_row 返回的一行结果
 std::string BuildArticleJson(MYSQL_ROW row) {
     auto cell = [&](unsigned int i) -> std::string_view {
         return (row[i]) ? std::string_view(row[i]) : std::string_view{};
@@ -442,6 +458,7 @@ std::string BuildArticleJson(MYSQL_ROW row) {
 }
 
 // 文章列表 JSON（可能为空 → []）
+// 参数：res - articles 查询结果集
 std::string BuildArticlesJson(MYSQL_RES* res) {
     std::string o = "[";
     bool first = true;
@@ -456,6 +473,7 @@ std::string BuildArticlesJson(MYSQL_RES* res) {
 }
 
 // 分类列表 JSON
+// 参数：res - categories 查询结果集
 std::string BuildCategoriesJson(MYSQL_RES* res) {
     std::string o = "[";
     bool first = true;
@@ -470,9 +488,9 @@ std::string BuildCategoriesJson(MYSQL_RES* res) {
     return o;
 }
 
-// 资源列表 JSON
-// 资源列表 JSON（只返回元数据 id/name/type，不含 url——大文件是 data URL，
-// 全量下发会让列表接口 body 巨大导致卡死；url 按 id 走 /api/resources/:id 按需取）
+// 资源列表 JSON（只返回元数据 id/name/type，url 按 id 走 /api/resources/:id 按需取，
+// 避免大文件 data URL 全量下发导致列表接口 body 巨大）
+// 参数：res - resources 查询结果集
 std::string BuildResourcesJson(MYSQL_RES* res) {
     std::string o = "[";
     bool first = true;
@@ -489,6 +507,7 @@ std::string BuildResourcesJson(MYSQL_RES* res) {
 }
 
 // 用户列表 JSON（只暴露 id/username/created_at，绝不下发 password）
+// 参数：res - users 查询结果集
 std::string BuildUsersJson(MYSQL_RES* res) {
     std::string o = "[";
     bool first = true;
@@ -510,19 +529,24 @@ std::string BuildUsersJson(MYSQL_RES* res) {
 
 class MysqlHandlerBase : public RequestHandler {
 public:
+    // 构造：保存共享的 MySQL 配置引用
+    // 参数：cfg - MySQL 连接配置
     explicit MysqlHandlerBase(const MysqlConfig& cfg) : cfg_(cfg) {}
 
     // 同步兜底：异步路径 handler 的真实请求走 HandleAsync，不会落到这里
+    // 参数：ctx - HTTP 请求上下文
     Response Handle(const Context& ctx) override {
         auto* pool = ctx.Pool();
         if (!pool) return Response::Raw(500, "no pool");
         return Response::Error(405, *pool);
     }
 
+    // 声明为异步 handler，框架据此走 HandleAsync 协程路径
     bool IsAsync() const override { return true; }
 
 protected:
-    // JSON 响应工厂（region 版写法，照抄 routes_demo）
+    // JSON 响应工厂：构造带 Content-Type: application/json 的响应并写入 body
+    // 参数：pool - 会话区（SessionRegion）；code - HTTP 状态码；body - JSON 响应体
     static Response JsonResponse(SessionRegion* pool, int code,
                                  std::string_view body) {
         if (!pool) return Response::Raw(code, "no pool");
@@ -545,6 +569,8 @@ protected:
 class LoginHandler : public MysqlHandlerBase {
 public:
     using MysqlHandlerBase::MysqlHandlerBase;
+    // 处理登录：按用户名密码查询 users，成功则签发 demo token 返回 {token, username}，失败返回 401
+    // 参数：ctx - HTTP 请求上下文（含 Body/Query/Param/Header）
     coro::Task<Response> HandleAsync(const Context& ctx) override {
         auto* pool = ctx.Pool();
         if (!pool) co_return Response::Raw(500, "no pool");
@@ -590,6 +616,8 @@ public:
 class ArticlesHandler : public MysqlHandlerBase {
 public:
     using MysqlHandlerBase::MysqlHandlerBase;
+    // 处理文章列表查询：可选按 category 过滤，按 id 倒序返回文章数组
+    // 参数：ctx - HTTP 请求上下文（含 Query 参数 category）
     coro::Task<Response> HandleAsync(const Context& ctx) override {
         auto* pool = ctx.Pool();
         if (!pool) co_return Response::Raw(500, "no pool");
@@ -624,6 +652,8 @@ public:
 class ArticleByIdHandler : public MysqlHandlerBase {
 public:
     using MysqlHandlerBase::MysqlHandlerBase;
+    // 处理单篇文章查询：按路径参数 id 查库，存在返回 200，否则返回 404
+    // 参数：ctx - HTTP 请求上下文（含 Param id）
     coro::Task<Response> HandleAsync(const Context& ctx) override {
         auto* pool = ctx.Pool();
         if (!pool) co_return Response::Raw(500, "no pool");
@@ -660,6 +690,8 @@ public:
 class SaveArticleHandler : public MysqlHandlerBase {
 public:
     using MysqlHandlerBase::MysqlHandlerBase;
+    // 处理文章保存（upsert）：body 含合法 id 且库中已存在则 UPDATE，否则 INSERT 新增
+    // 参数：ctx - HTTP 请求上下文（body 为文章 JSON）
     coro::Task<Response> HandleAsync(const Context& ctx) override {
         auto* pool = ctx.Pool();
         if (!pool) co_return Response::Raw(500, "no pool");
@@ -751,6 +783,8 @@ public:
 class DeleteArticleHandler : public MysqlHandlerBase {
 public:
     using MysqlHandlerBase::MysqlHandlerBase;
+    // 处理删除文章：按路径参数 id 从 articles 表删除
+    // 参数：ctx - HTTP 请求上下文（含 Param id）
     coro::Task<Response> HandleAsync(const Context& ctx) override {
         auto* pool = ctx.Pool();
         if (!pool) co_return Response::Raw(500, "no pool");
@@ -778,6 +812,8 @@ public:
 class CategoriesHandler : public MysqlHandlerBase {
 public:
     using MysqlHandlerBase::MysqlHandlerBase;
+    // 处理分类列表查询：按 id 升序返回全部分类
+    // 参数：ctx - HTTP 请求上下文
     coro::Task<Response> HandleAsync(const Context& ctx) override {
         auto* pool = ctx.Pool();
         if (!pool) co_return Response::Raw(500, "no pool");
@@ -802,6 +838,8 @@ public:
 class SaveCategoryHandler : public MysqlHandlerBase {
 public:
     using MysqlHandlerBase::MysqlHandlerBase;
+    // 处理分类保存（upsert）：body 含合法 id 则 UPDATE name，否则 INSERT 新增
+    // 参数：ctx - HTTP 请求上下文（body 为分类 JSON）
     coro::Task<Response> HandleAsync(const Context& ctx) override {
         auto* pool = ctx.Pool();
         if (!pool) co_return Response::Raw(500, "no pool");
@@ -851,6 +889,8 @@ public:
 class DeleteCategoryHandler : public MysqlHandlerBase {
 public:
     using MysqlHandlerBase::MysqlHandlerBase;
+    // 处理删除分类：按路径参数 id 从 categories 表删除
+    // 参数：ctx - HTTP 请求上下文（含 Param id）
     coro::Task<Response> HandleAsync(const Context& ctx) override {
         auto* pool = ctx.Pool();
         if (!pool) co_return Response::Raw(500, "no pool");
@@ -878,6 +918,8 @@ public:
 class ResourcesHandler : public MysqlHandlerBase {
 public:
     using MysqlHandlerBase::MysqlHandlerBase;
+    // 处理资源列表查询：按 id 倒序返回资源元数据（不含 url 大字段）
+    // 参数：ctx - HTTP 请求上下文
     coro::Task<Response> HandleAsync(const Context& ctx) override {
         auto* pool = ctx.Pool();
         if (!pool) co_return Response::Raw(500, "no pool");
@@ -902,6 +944,8 @@ public:
 class ResourceByIdHandler : public MysqlHandlerBase {
 public:
     using MysqlHandlerBase::MysqlHandlerBase;
+    // 处理单个资源查询：按 id 返回 {id,name,url,type}（含完整 data URL，供复制地址/选背景按需取）
+    // 参数：ctx - HTTP 请求上下文（含 Param id）
     coro::Task<Response> HandleAsync(const Context& ctx) override {
         auto* pool = ctx.Pool();
         if (!pool) co_return Response::Raw(500, "no pool");
@@ -941,6 +985,8 @@ public:
 class ResourceImageHandler : public MysqlHandlerBase {
 public:
     using MysqlHandlerBase::MysqlHandlerBase;
+    // 处理图片/视频直出：外链则 302 重定向，data URL 则解码成文件二进制返回
+    // 参数：ctx - HTTP 请求上下文（含 Param id）
     coro::Task<Response> HandleAsync(const Context& ctx) override {
         auto* pool = ctx.Pool();
         if (!pool) co_return Response::Raw(500, "no pool");
@@ -1001,6 +1047,8 @@ public:
 class DeleteResourceHandler : public MysqlHandlerBase {
 public:
     using MysqlHandlerBase::MysqlHandlerBase;
+    // 处理删除资源：按路径参数 id 从 resources 表删除
+    // 参数：ctx - HTTP 请求上下文（含 Param id）
     coro::Task<Response> HandleAsync(const Context& ctx) override {
         auto* pool = ctx.Pool();
         if (!pool) co_return Response::Raw(500, "no pool");
@@ -1028,6 +1076,8 @@ public:
 class UploadImageHandler : public MysqlHandlerBase {
 public:
     using MysqlHandlerBase::MysqlHandlerBase;
+    // 处理图片上传（multipart）：解析文件 base64 成 data URL 入库，按 mime/扩展名判定视频或图片
+    // 参数：ctx - HTTP 请求上下文（含文件上传 body 与 Content-Type）
     coro::Task<Response> HandleAsync(const Context& ctx) override {
         auto* pool = ctx.Pool();
         if (!pool) co_return Response::Raw(500, "no pool");
@@ -1084,6 +1134,8 @@ public:
 class UploadMdHandler : public MysqlHandlerBase {
 public:
     using MysqlHandlerBase::MysqlHandlerBase;
+    // 处理 Markdown 上传（multipart）：按扩展名过滤后 base64 成 data URL 入库（type='md'）
+    // 参数：ctx - HTTP 请求上下文（含文件上传 body 与 Content-Type）
     coro::Task<Response> HandleAsync(const Context& ctx) override {
         auto* pool = ctx.Pool();
         if (!pool) co_return Response::Raw(500, "no pool");
@@ -1136,6 +1188,8 @@ public:
 class UsersHandler : public MysqlHandlerBase {
 public:
     using MysqlHandlerBase::MysqlHandlerBase;
+    // 处理用户列表查询：返回全部用户（不含 password 字段）
+    // 参数：ctx - HTTP 请求上下文
     coro::Task<Response> HandleAsync(const Context& ctx) override {
         auto* pool = ctx.Pool();
         if (!pool) co_return Response::Raw(500, "no pool");
@@ -1162,6 +1216,8 @@ public:
 class SaveUserHandler : public MysqlHandlerBase {
 public:
     using MysqlHandlerBase::MysqlHandlerBase;
+    // 处理用户保存（upsert）：校验用户名唯一、编辑时密码留空表示不改、新增必须有密码
+    // 参数：ctx - HTTP 请求上下文（body 为用户 JSON）
     coro::Task<Response> HandleAsync(const Context& ctx) override {
         auto* pool = ctx.Pool();
         if (!pool) co_return Response::Raw(500, "no pool");
@@ -1258,6 +1314,8 @@ public:
 class DeleteUserHandler : public MysqlHandlerBase {
 public:
     using MysqlHandlerBase::MysqlHandlerBase;
+    // 处理删除用户：按路径参数 id 删除（禁止删除 id=1 的种子管理员）
+    // 参数：ctx - HTTP 请求上下文（含 Param id）
     coro::Task<Response> HandleAsync(const Context& ctx) override {
         auto* pool = ctx.Pool();
         if (!pool) co_return Response::Raw(500, "no pool");
@@ -1289,6 +1347,7 @@ public:
 // site_stats 分组聚合结果 → JSON（range/total/points）。行列：
 // 0=bucket 1=req 2=err 3=bytes 4=avg(p50) 5=avg(p90) 6=avg(p99)
 // 7=avg(act) 8=max(act_max) 9=max(p99)
+// 参数：res - 聚合查询结果集；range - 统计区间标识（如 24h/7d）
 std::string BuildStatsJson(MYSQL_RES* res, const std::string& range)
 {
     std::string body = "{\"range\":" + JsonStr(range)
@@ -1332,6 +1391,8 @@ std::string BuildStatsJson(MYSQL_RES* res, const std::string& range)
 class StatsHandler : public MysqlHandlerBase {
 public:
     using MysqlHandlerBase::MysqlHandlerBase;
+    // 处理访问统计查询：按 range（24h/7d）聚合 site_stats 返回趋势数据
+    // 参数：ctx - HTTP 请求上下文（含 Query 参数 range）
     coro::Task<Response> HandleAsync(const Context& ctx) override {
         auto* pool = ctx.Pool();
         if (!pool) co_return Response::Raw(500, "no pool");
@@ -1369,6 +1430,7 @@ public:
 } // namespace
 
 // ── 访问统计落库：每 60s 聚合实时指标写入 site_stats（分钟粒度）──
+// 参数：mc - 指标收集器（取其最近 60s 汇总窗口）；cfg - MySQL 连接配置
 coro::Task<void> PersistSiteStats(MetricsCollector* mc, const MysqlConfig& cfg)
 {
     if (!mc) co_return;
@@ -1420,6 +1482,7 @@ namespace {
 // 关闭状态下只有局域网设备会用 `http://<IP>:<port>` 访问（Host 即该 IP），
 // 本机后台走 localhost/127.0.0.1，据此区分来源（Docker NAT 后源 IP 不可用）。
 // 返回 false（放行）的情况：空、IPv6 形式、localhost、回环、非点分主机名。
+// 参数：host - 请求的 Host 头（含端口）；返回 true 表示局域网 IP 访问
 bool IsLanHost(std::string_view host) {
     if (host.empty()) return false;
     // IPv6（如 [::1]:8443）保守放行
@@ -1440,6 +1503,7 @@ bool IsLanHost(std::string_view host) {
 
 // 解析 JSON 布尔字段（前端 JSON.stringify 输出无引号 true/false，
 // JsonField 只支持带引号字符串值，布尔需单独解析；兼容 "true"/"false"）
+// 参数：body - JSON 对象字符串；key - 布尔字段名；def - 未找到时的默认值
 bool JsonBool(std::string_view body, std::string_view key, bool def = false) {
     const std::string needle = "\"" + std::string(key) + "\"";
     auto p = body.find(needle);
@@ -1463,6 +1527,8 @@ bool JsonBool(std::string_view body, std::string_view key, bool def = false) {
 class LanStatusHandler : public MysqlHandlerBase {
 public:
     using MysqlHandlerBase::MysqlHandlerBase;
+    // 处理局域网访问开关：GET 返回当前状态，POST 更新内存并落库 site_config
+    // 参数：ctx - HTTP 请求上下文（含 Body/Query）
     coro::Task<Response> HandleAsync(const Context& ctx) override {
         auto* pool = ctx.Pool();
         if (!pool) co_return Response::Raw(500, "no pool");
@@ -1504,6 +1570,8 @@ public:
 class SiteConfigHandler : public MysqlHandlerBase {
 public:
     using MysqlHandlerBase::MysqlHandlerBase;
+    // 处理站点全局配置读写：POST 原样落库 blog_config，GET 原样返回配置 JSON
+    // 参数：ctx - HTTP 请求上下文（含 Body）
     coro::Task<Response> HandleAsync(const Context& ctx) override {
         auto* pool = ctx.Pool();
         if (!pool) co_return Response::Raw(500, "no pool");
@@ -1556,17 +1624,20 @@ public:
 
 // 上报请求是否来自本机（转发器连 127.0.0.1:9443 上报，Host=127.0.0.1:9443；
 // 外部设备经转发器的 Host 是局域网 IP，拒绝，防止伪造灌库）
+// 参数：host - 请求的 Host 头；返回 true 表示来自本机（127.0.0.1/localhost）
 bool IsLocalHost(std::string_view host) {
     if (host.empty()) return false;
     return host.find("127.0.0.1") != std::string_view::npos ||
            host.find("localhost") != std::string_view::npos;
 }
 
-// 当前在线 IP 数 / 指定 IP 是否在线
+// 返回当前在线的 IP 数量（线程安全）
 int ActiveVisitorCount() {
     std::lock_guard<std::mutex> lk(g_visitor_mutex);
     return static_cast<int>(g_active_visitors.size());
 }
+// 判断指定 IP 是否在线（存在未断开的活动连接，线程安全）
+// 参数：ip - 待查询的客户端 IP
 bool IsOnline(const std::string& ip) {
     std::lock_guard<std::mutex> lk(g_visitor_mutex);
     auto it = g_active_visitors.find(ip);
@@ -1581,6 +1652,8 @@ bool IsOnline(const std::string& ip) {
 class VisitorHandler : public MysqlHandlerBase {
 public:
     using MysqlHandlerBase::MysqlHandlerBase;
+    // 处理访问者统计上报/查询：POST 仅本机转发器可上报连接/断开，GET 返回最近访问者列表
+    // 参数：ctx - HTTP 请求上下文（含 Body/Query/Header）
     coro::Task<Response> HandleAsync(const Context& ctx) override {
         auto* pool = ctx.Pool();
         if (!pool) co_return Response::Raw(500, "no pool");
@@ -1673,6 +1746,7 @@ public:
 // ═══════════════════════════════════════════════════════════════════
 
 // 关闭时拦截局域网 IP Host 请求（403），localhost/127.0.0.1 始终放行
+// 参数：ctx - HTTP 请求上下文（含 Host 头）；返回拦截的 403 响应或放行
 Response LanGuardMiddleware::HandlePre(Context& ctx) {
     if (g_lan_enabled.load()) return Response::None();
     if (!IsLanHost(ctx.Header("host"))) return Response::None();
@@ -1688,11 +1762,14 @@ Response LanGuardMiddleware::HandlePre(Context& ctx) {
     return Response::Raw(403, raw);
 }
 
+// 返回局域网访问开关当前状态（线程安全）
 bool IsLanEnabled() { return g_lan_enabled.load(); }
+// 返回宿主机局域网 IP（来自环境变量 HOST_LAN_IP）
 std::string LanIp() { return g_lan_ip; }
 
 // 启动时（main 线程，同步 MySQL）读 site_config 初始化开关状态；
 // 表/行不存在时保持默认（关闭）。g_lan_ip 来自环境变量 HOST_LAN_IP。
+// 参数：cfg - MySQL 连接配置
 void InitLanStateFromDb(const MysqlConfig& cfg) {
     const char* env = std::getenv("HOST_LAN_IP");
     g_lan_ip = env ? env : "";
@@ -1746,6 +1823,8 @@ void InitLanStateFromDb(const MysqlConfig& cfg) {
 // ═══════════════════════════════════════════════════════════════════
 // 路由注册
 // ═══════════════════════════════════════════════════════════════════
+// 注册博客后端全部 REST 路由，每个 Handler 共享同一份 MysqlConfig
+// 参数：router - 路由器（按方法+路径绑定 Handler）；cfg - MySQL 连接配置
 void RegisterBlogRoutes(Router& router, const MysqlConfig& cfg) {
     router.Get   ("/api/network/lan",   std::make_unique<LanStatusHandler>(cfg));
     router.Post  ("/api/network/lan",   std::make_unique<LanStatusHandler>(cfg));

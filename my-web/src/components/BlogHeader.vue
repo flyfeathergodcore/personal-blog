@@ -46,14 +46,24 @@ const router = useRouter()
 const route = useRoute()
 const { isDark, toggleTheme } = useTheme()
 
-// 菜单数据：读全局配置（后端 blog_config → blogConfigState，删除「关于」等即时生效）
+/**
+ * 菜单数据：读全局配置（后端 blog_config → blogConfigState，删除「关于」等即时生效）
+ */
 const menus = computed(() => blogConfigState.navMenus)
+/**
+ * 导航栏标题：优先取 props.title，缺省用全局站点名
+ */
 const title = computed(() => props.title || blogConfigState.siteName)
 
-// 当前路由高亮
+/**
+ * 当前路由路径：用于高亮对应菜单项
+ */
 const activePath = computed(() => route.path)
 
-// 菜单点击：外部链接新窗口打开，路由内跳转
+/**
+ * 菜单点击处理：外部链接新窗口打开，站内路由跳转
+ * @param path 点击的菜单路径
+ */
 const handleSelect = (path: string) => {
   emit('menu-select', { path })
   if (path.startsWith('http')) {
@@ -63,7 +73,9 @@ const handleSelect = (path: string) => {
   }
 }
 
-// 后台入口
+/**
+ * 后台入口：跳转到后台管理页
+ */
 const goAdmin = () => {
   router.push('/admin')
 }

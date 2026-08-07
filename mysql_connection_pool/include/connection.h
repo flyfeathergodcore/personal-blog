@@ -19,12 +19,22 @@ class Task;
 class connection
 {
 public:
+    // 构造函数：初始化连接句柄为空
     connection();
+    // 析构函数：关闭并释放数据库连接
     ~connection();
+    // 同步连接数据库；失败返回 false
+    // 参数：host - 主机名；user - 用户名；password - 密码；database - 数据库名
     bool connect(const char* host, const char* user, const char* password, const char* database);
+    // 检查当前是否已连接
     bool is_connected() const;
+    // 同步执行更新操作（INSERT/UPDATE/DELETE）；失败返回 false
+    // 参数：query - SQL 语句
     bool update(const char* query);
+    // 同步执行查询操作（SELECT），结果存入 *result（调用方负责 mysql_free_result）；失败返回 false
+    // 参数：query - SQL 语句；result - 输出参数，结果集指针
     bool query(const char* query, MYSQL_RES** result);
+    // 关闭数据库连接；成功关闭返回 true
     bool close();
 
     // ---- 异步接口（失败抛 MySQLAsyncError / MySQLTimeoutError，需跑在事件循环内）----

@@ -3,6 +3,8 @@
 #include "protocol/session_region.hpp"
 #include <ctime>
 
+// 处理健康检查请求：返回 JSON {status:"ok", uptime}，同时供存活/就绪探针使用
+// 参数：ctx - HTTP 请求上下文
 Response HealthHandler::Handle(const Context& ctx)
 {
     auto* pool = ctx.Pool();

@@ -84,7 +84,9 @@ const route = useRoute()
 const loginBg = localStorage.getItem('loginBgImage') || ''
 const loginCardBg = localStorage.getItem('loginCardBgImage') || ''
 
-// 登录页背景：设置了图片则覆盖显示，否则使用默认渐变
+/**
+ * 登录页背景样式：设置了背景图则覆盖显示，否则返回空对象使用默认渐变
+ */
 const pageBgStyle = computed(() =>
   loginBg
     ? {
@@ -95,7 +97,9 @@ const pageBgStyle = computed(() =>
     : {}
 )
 
-// 登录框背景：设置了图片则覆盖显示，否则使用默认白色
+/**
+ * 登录框背景样式：设置了背景图则覆盖显示，否则返回空对象使用默认白色
+ */
 const cardBgStyle = computed(() =>
   loginCardBg
     ? {
@@ -124,7 +128,10 @@ const rules: FormRules = {
   ]
 }
 
-// 登录：表单校验通过后调用 login 接口，成功签发 token 并跳转后台（支持 redirect 回跳）
+/**
+ * 登录：表单校验通过后调用登录接口，成功后持久化 token 并跳转后台（支持 redirect 回跳）
+ * @returns 无返回值（异步执行，成功/失败均有提示）
+ */
 const handleLogin = async () => {
   const valid = await formRef.value?.validate().catch(() => false)
   if (!valid) return

@@ -97,6 +97,9 @@ const visitorList = ref<VisitorInfo[]>([])
 const visitorOnlineCount = ref(0)
 const visitorLoading = ref(false)
 
+/**
+ * 拉取访问者列表与当前在线 IP 数（5s 轮询）；接口异常静默，保留上次数据
+ */
 const loadVisitors = async (): Promise<void> => {
   visitorLoading.value = true
   try {
@@ -110,7 +113,11 @@ const loadVisitors = async (): Promise<void> => {
   }
 }
 
-// 运行时长格式化：x天x时 / x时x分 / x分
+/**
+ * 运行时长格式化：x天x时 / x时x分 / x分
+ * @param s 秒数
+ * @returns 格式化后的时长字符串
+ */
 const fmtUptime = (s: number): string => {
   const d = Math.floor(s / 86400)
   const h = Math.floor((s % 86400) / 3600)
@@ -118,7 +125,10 @@ const fmtUptime = (s: number): string => {
   return d > 0 ? `${d}天${h}时` : h > 0 ? `${h}时${m}分` : `${m}分`
 }
 
-// 渲染实时卡片 + 近 60s QPS 曲线
+/**
+ * 渲染实时指标卡片 + 近 60s QPS 曲线（ECharts setOption）
+ * @param m /metrics.json 解析出的实时数据
+ */
 const renderRealtime = (m: MetricsJson): void => {
   const hist = m.history || []
   const last = hist[hist.length - 1]
@@ -154,7 +164,9 @@ const renderRealtime = (m: MetricsJson): void => {
   })
 }
 
-// 加载历史趋势（近 24h/7d）
+/**
+ * 加载并渲染历史访问趋势（近 24h/7d）；无落库数据/接口异常时清空图表
+ */
 const loadStats = async (): Promise<void> => {
   try {
     const res: StatsResult = await getStats(range.value)
@@ -190,17 +202,24 @@ const loadStats = async (): Promise<void> => {
   }
 }
 
-// 窗口 resize 时图表自适应
+/**
+ * 窗口尺寸变化时让实时与趋势图表自适应
+ */
 const resize = (): void => {
   realtimeChart?.resize()
   trendChart?.resize()
 }
 
+/**
+ * 生命周期：初始化图表并启动实时/历史/访问者三类轮询定时器
+ */
 onMounted(() => {
   realtimeChart = echarts.init(realtimeEl.value as HTMLDivElement)
   trendChart = echarts.init(trendEl.value as HTMLDivElement)
 
-  // 实时轮询：立即拉一次 + 每 3s 刷新（失败静默，卡片保持「—」）
+  /**
+   * 实时轮询：立即拉一次 + 每 3s 刷新（失败静默，卡片保持「—」）
+   */
   const pollRealtime = async (): Promise<void> => {
     try {
       const r = await fetch('/metrics.json')
@@ -223,6 +242,9 @@ onMounted(() => {
   window.addEventListener('resize', resize)
 })
 
+/**
+ * 生命周期：清理全部轮询定时器、移除 resize 监听并销毁图表实例
+ */
 onBeforeUnmount(() => {
   window.clearInterval(realtimeTimer)
   window.clearInterval(trendTimer)

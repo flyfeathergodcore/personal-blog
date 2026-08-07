@@ -26,8 +26,11 @@ defineProps({
   }
 })
 
-// 预留后期扩展点：框选文字输入 / 结果插入文档的方法，供父组件（MdViewer 场景）调用
-// TODO(后期): 接入真实 AI 交互后实现具体逻辑
+/**
+ * 预留扩展点：框选文字输入 / 结果插入文档的方法，供父组件（MdViewer 场景）调用
+ * TODO(后期): 接入真实 AI 交互后实现具体逻辑
+ * @param text 待插入的文本内容
+ */
 defineExpose({
   insertToDocument: (text: string): void => {
     console.log('AI 结果插入占位:', text)

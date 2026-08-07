@@ -2,12 +2,16 @@
 #include "protocol/region_pool.hpp"
 #include <cstring>
 
+// 析构：若已从池中获取区域，则归还（Release）给 RegionPool
+// 参数：无
 SessionRegion::~SessionRegion() {
     if (pool_ && offset_ != 0) {
         pool_->Release(offset_, cap_);
     }
 }
 
+// 初始化/绑定区域池：幂等可重复调用（已绑同池则仅重置，否则先归还旧区域再重新获取）
+// 参数：pool - 所属 RegionPool；传 nullptr 表示解除绑定
 void SessionRegion::Init(RegionPool* pool) {
     // If already attached to this pool with a valid region, just reset.
     if (pool_ == pool && offset_ != 0) {
@@ -29,11 +33,15 @@ void SessionRegion::Init(RegionPool* pool) {
     used_   = 0;
 }
 
+// 复位为下一个请求：游标归零并退出结构化模式，但区域保留在池中不归还
+// 参数：无
 void SessionRegion::Reset() {
     used_ = 0;
     structured_mode_ = false;
 }
 
+// 从区域中按 8 字节对齐分配 n 字节（容量不足时自动 2× 迁移扩容）
+// 参数：n - 请求分配字节数；返回：分配的内存指针，失败返回 nullptr
 void* SessionRegion::Alloc(size_t n) {
     if (n == 0) return nullptr;
 
@@ -53,6 +61,8 @@ void* SessionRegion::Alloc(size_t n) {
     return ptr;
 }
 
+// 将字符串复制到区域内存并返回视图（容量不足自动扩容）
+// 参数：s - 待复制的字符串；返回：区域内的副本视图，空串返回空
 std::string_view SessionRegion::Dup(std::string_view s) {
     if (s.empty()) return {};
     char* p = static_cast<char*>(Alloc(s.size()));
@@ -61,6 +71,8 @@ std::string_view SessionRegion::Dup(std::string_view s) {
     return {p, s.size()};
 }
 
+// 复制字符串并返回基于偏移的引用（跨迁移存续）
+// 参数：s - 待复制的字符串；返回：RegionOff{偏移, 长度}，空串返回空
 RegionOff SessionRegion::DupOff(std::string_view s) {
     auto sv = Dup(s);
     if (sv.empty()) return {};
@@ -68,6 +80,8 @@ RegionOff SessionRegion::DupOff(std::string_view s) {
     return {off, static_cast<uint32_t>(sv.size())};
 }
 
+// 扩容迁移：向池申请 2× 容量的新区块，拷贝旧数据后释放旧区域
+// 参数：无
 void SessionRegion::Migrate() {
     if (!pool_) return;
 
@@ -91,6 +105,8 @@ void SessionRegion::Migrate() {
     cap_    = new_cap_actual;
 }
 
+// 向区域写入数据（无对齐填充，容量不足自动 2× 迁移）
+// 参数：s - 待写入的字节数据
 void SessionRegion::Write(std::string_view s) {
     if (s.empty()) return;
     auto n = s.size();
@@ -105,10 +121,14 @@ void SessionRegion::Write(std::string_view s) {
     used_ += n;
 }
 
+// 便捷写入 "\r\n" 回车换行
+// 参数：无
 void SessionRegion::WriteCRLF() {
     Write("\r\n");
 }
 
+// 以十进制无分配方式写入无符号整数
+// 参数：n - 待写入的整数
 void SessionRegion::WriteUint(uint64_t n) {
     char tmp[24];
     char* p = tmp + sizeof(tmp);

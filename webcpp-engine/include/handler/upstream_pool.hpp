@@ -31,6 +31,8 @@ struct UpstreamServer {
 
 class UpstreamPool {
 public:
+    // 构造上游池
+    // 参数：servers - 上游服务器列表
     explicit UpstreamPool(std::vector<UpstreamServer> servers);
 
     /// Pick a healthy backend using weighted round-robin.

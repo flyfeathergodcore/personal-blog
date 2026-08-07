@@ -18,9 +18,11 @@ class MetricsCollector;
 //
 class SessionBase : public std::enable_shared_from_this<SessionBase> {
 public:
+    // 虚析构函数：默认实现
     virtual ~SessionBase() = default;
 
     /// Main coroutine — each invocation processes the connection lifecycle.
+    /// 纯虚函数：由各协议会话实现连接生命周期入口
     virtual coro::Task<void> Start() = 0;
 
     /// Per-connection memory region (from Worker's RegionPool).
@@ -39,6 +41,8 @@ public:
     void SetWsIdleTimeout(unsigned int sec) { ws_idle_timeout_ = sec; }
 
 protected:
+    // 受保护构造函数：保存路由与中间件引用（子类构造时调用）
+    // 参数：router - 路由表；middleware - 中间件管理器
     SessionBase(Router& router,
                 MiddlewareManager& middleware)
         : router_(router)

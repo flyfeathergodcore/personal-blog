@@ -15,10 +15,14 @@
 
 namespace net {
 
+// 构造：绑定底层流并预留缓冲容量
+// 参数：s - 底层 TcpStream 引用；cap - 缓冲预分配容量（字节）
 BufferedReader::BufferedReader(TcpStream& s, size_t cap) : s_(s) {
     buf_.reserve(cap);
 }
 
+// 按分隔符读取：跨读累积缓冲定位 delim，返回其前全部数据（分隔符横跨两次分段也能识别）
+// 参数：delim - 分隔符；out - 输出。成功返回 {out.size(), None}
 coro::Task<IoResult> BufferedReader::read_until(std::string_view delim, std::string& out) {
     out.clear();
     for (;;) {
@@ -43,6 +47,8 @@ coro::Task<IoResult> BufferedReader::read_until(std::string_view delim, std::str
     }
 }
 
+// 精确读取 n 字节：先消费缓冲内未读数据，不足部分再从流读取
+// 参数：n - 需读取字节数；out - 输出。成功返回 {n, None}
 coro::Task<IoResult> BufferedReader::read_exact(size_t n, std::string& out) {
     out.clear();
     // 先消费缓冲区内已读未消费的部分
@@ -63,6 +69,7 @@ coro::Task<IoResult> BufferedReader::read_exact(size_t n, std::string& out) {
     co_return IoResult{n, IoError::None};
 }
 
+// 返回已缓冲未消费数据的视图（供外部直接读取，不移动读指针）
 std::string_view BufferedReader::buffered() const {
     return std::string_view(buf_).substr(pos_);
 }

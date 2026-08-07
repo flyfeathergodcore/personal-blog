@@ -5,6 +5,12 @@ const BASE_URL = import.meta.env.VITE_API_BASE || '/api'
 // 登录 token 存储键（与 router 守卫 / LoginView 共用）
 const TOKEN_KEY = 'blog_token'
 
+/**
+ * 通用请求封装：自动携带 token，401 清登录态跳登录页，非 2xx 抛后端错误信息
+ * @param url 请求路径（相对 BASE_URL）
+ * @param options fetch 请求配置
+ * @returns 解析后的响应数据
+ */
 async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
   const token = localStorage.getItem(TOKEN_KEY)
   const headers: Record<string, string> = {
@@ -36,7 +42,11 @@ async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
   return res.json() as Promise<T>
 }
 
-// 需要拿到"未找到"（404 → null）时用 getOptional（如文章详情）
+/**
+ * 需要拿到"未找到"（404 → null）时的请求方法（如文章详情）
+ * @param url 请求路径（相对 BASE_URL）
+ * @returns 响应数据，404 时返回 null
+ */
 async function requestOptional<T>(url: string): Promise<T | null> {
   const res = await fetch(`${BASE_URL}${url}`, {
     headers: (localStorage.getItem(TOKEN_KEY)
@@ -52,23 +62,33 @@ async function requestOptional<T>(url: string): Promise<T | null> {
 }
 
 export const http = {
+  /** 发送 GET 请求 */
   get: <T>(url: string) => request<T>(url),
+  /** 发送 GET 请求，404 时返回 null */
   getOptional: <T>(url: string) => requestOptional<T>(url),
+  /** 发送 POST 请求（JSON 请求体） */
   post: <T>(url: string, data?: unknown) =>
     request<T>(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: data === undefined ? undefined : JSON.stringify(data),
     }),
+  /** 发送 PUT 请求（JSON 请求体） */
   put: <T>(url: string, data?: unknown) =>
     request<T>(url, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: data === undefined ? undefined : JSON.stringify(data),
     }),
+  /** 发送 DELETE 请求 */
   delete: <T>(url: string) => request<T>(url, { method: 'DELETE' }),
-  // 文件上传：FormData，浏览器自动带 multipart boundary。
-  // fetch 不提供上传进度，故用 XHR 实现；onProgress 回调 0-100 整数百分比
+  /**
+   * 文件上传：FormData 带 multipart boundary，用 XHR 实现进度回调
+   * @param url 上传接口路径
+   * @param file 待上传文件
+   * @param onProgress 可选进度回调，0-100 整数百分比
+   * @returns 上传结果
+   */
   upload: <T>(url: string, file: File, onProgress?: (percent: number) => void) =>
     new Promise<T>((resolve, reject) => {
       const xhr = new XMLHttpRequest()

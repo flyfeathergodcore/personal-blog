@@ -72,10 +72,16 @@ const editingId = ref('') // 空 = 新增，非空 = 编辑
 
 const form = reactive({ username: '', password: '' })
 
+/**
+ * 拉取用户列表
+ */
 const fetchData = async () => {
   users.value = await getUsers()
 }
 
+/**
+ * 打开新增用户弹窗：清空表单并切换到新增态
+ */
 const openAdd = () => {
   editingId.value = ''
   form.username = ''
@@ -83,6 +89,10 @@ const openAdd = () => {
   dialogVisible.value = true
 }
 
+/**
+ * 打开编辑用户弹窗：回填用户名，密码留空表示不修改
+ * @param row 待编辑的用户
+ */
 const openEdit = (row: User) => {
   editingId.value = row.id
   form.username = row.username
@@ -90,6 +100,9 @@ const openEdit = (row: User) => {
   dialogVisible.value = true
 }
 
+/**
+ * 保存用户：新增必须带密码，编辑时密码留空则不提交 password 字段（后端不改密码）
+ */
 const handleSave = async () => {
   const username = form.username.trim()
   if (!username) return
@@ -107,6 +120,10 @@ const handleSave = async () => {
   }
 }
 
+/**
+ * 删除用户：先弹确认框，用户取消则跳过；成功后刷新列表
+ * @param row 待删除的用户
+ */
 const handleDelete = async (row: User) => {
   try {
     await ElMessageBox.confirm(`确定删除用户「${row.username}」？`, '删除确认', {

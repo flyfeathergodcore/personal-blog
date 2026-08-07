@@ -88,6 +88,9 @@ const emit = defineEmits(['menu-select'])
 
 // 内部状态：当前选中项（同步外部传入的 defaultActive）
 const activeIndex = ref(props.defaultActive)
+/**
+ * 监听外部 defaultActive 变化：同步内部高亮选中项
+ */
 watch(
   () => props.defaultActive,
   (val) => {
@@ -95,15 +98,20 @@ watch(
   }
 )
 
-// 菜单选中：更新内部高亮并通知父组件
+/**
+ * 菜单选中：更新内部高亮并通知父组件
+ * @param key 选中菜单项的 index
+ * @param keyPath 选中项的完整 index 路径
+ */
 const handleSelect = (key: string, keyPath: string[]) => {
   activeIndex.value = key
   emit('menu-select', { key, keyPath })
 }
 
-// 侧边栏配色：暗色模式下不覆盖 CSS 变量（强制跟随暗色主题）；
-// 亮色模式下才应用外部自定义颜色
 const { isDark } = useTheme()
+/**
+ * 侧边栏配色：暗色模式不覆盖 CSS 变量（强制跟随暗色主题），亮色模式才应用外部自定义颜色
+ */
 const menuStyle = computed(() => {
   const style: Record<string, string> = {}
   if (isDark.value) return style
@@ -113,7 +121,9 @@ const menuStyle = computed(() => {
   return style
 })
 
-// 暴露方法：外部可调用重置选中状态
+/**
+ * 暴露方法：外部可调用以重置菜单选中状态
+ */
 defineExpose({
   resetMenu: () => {
     activeIndex.value = ''

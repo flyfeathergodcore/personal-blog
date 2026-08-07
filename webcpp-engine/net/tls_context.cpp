@@ -9,6 +9,8 @@
 
 namespace net {
 
+// 从 PEM 文件加载 DH 参数并设置到 SSL_CTX（供 TLS<=1.2 DHE 套件）
+// 参数：ctx - 目标 SSL_CTX；dh_file - PEM 格式 DH 参数文件路径。成功返回 true
 // ── 可选 DH 参数文件加载 ──
 // OpenSSL 3.0 已移除 SSL_CTX_set_tmp_dh_file，改用 PEM_read_bio_DHparams 读取
 // DH* 再经 SSL_CTX_set_tmp_dh 设置（保留给 TLS<=1.2 DHE 套件，兼容旧配置）。
@@ -33,6 +35,7 @@ static bool load_dh_file(SSL_CTX* ctx, const std::string& dh_file)
 
 // ALPN 选择回调：按 RFC 7301 广告 "h2" 优先、"h1" 兜底。
 // wire format：单字节长度 + 协议名，如 {2,'h','2'} 表示 "h2"。
+// 参数：out/outlen - 输出选中协议；in/inlen - 客户端 ALPN 列表
 static int alpn_select_cb(SSL* /*ssl*/,
                           const unsigned char** out, unsigned char* outlen,
                           const unsigned char* in, unsigned int inlen,
@@ -49,6 +52,7 @@ static int alpn_select_cb(SSL* /*ssl*/,
     return SSL_TLSEXT_ERR_OK;
 }
 
+// 构造：创建服务端 SSL_CTX，配置安全默认项、ALPN 回调与 TLS 会话缓存
 TlsContext::TlsContext()
 {
     ctx_ = SSL_CTX_new(TLS_server_method());
@@ -90,11 +94,14 @@ TlsContext::TlsContext()
     std::cout << "[tls] 会话缓存已启用 (max 1024, timeout 300s)" << std::endl;
 }
 
+// 析构：释放 SSL_CTX
 TlsContext::~TlsContext()
 {
     if (ctx_) SSL_CTX_free(ctx_);
 }
 
+// 检查指定 SSL 会话是否经 ALPN 协商出 "h2"
+// 参数：ssl - 目标 SSL 会话。协商出 h2 返回 true
 bool TlsContext::IsHttp2(SSL* ssl)
 {
     if (!ssl) return false;
@@ -104,6 +111,8 @@ bool TlsContext::IsHttp2(SSL* ssl)
     return (alpn && alpn_len == 2 && std::memcmp(alpn, "h2", 2) == 0);
 }
 
+// 加载证书链 + 私钥（可选 DH 参数文件），全部校验通过返回 true
+// 参数：cert_file - 证书链 PEM 路径；key_file - 私钥 PEM 路径；dh_file - DH 参数 PEM 路径（可为空）
 bool TlsContext::Load(const std::string& cert_file,
                       const std::string& key_file,
                       const std::string& dh_file)

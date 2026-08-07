@@ -17,10 +17,15 @@ namespace net {
 
 class TlsStream {
 public:
+    // 构造：包装底层连接与 TLS 上下文（服务端模式）
+    // 参数：tcp - 底层连接（接管所有权）；ctx - TLS 上下文
     TlsStream(TcpStream tcp, SSL_CTX* ctx);
+    // 析构：关闭 TLS 连接与底层 fd
     ~TlsStream();
+    // 移动构造/赋值：接管底层连接与 SSL 对象
     TlsStream(TlsStream&&) noexcept;
     TlsStream& operator=(TlsStream&&) noexcept;
+    // 禁止拷贝
     TlsStream(const TlsStream&) = delete;
     TlsStream& operator=(const TlsStream&) = delete;
 
@@ -35,9 +40,13 @@ public:
     coro::Task<bool>     writev_all(std::initializer_list<std::string_view> parts,
                                     int64_t timeout_ms = -1);
 
+    // 底层连接是否有效
     bool is_open() const { return tcp_.is_open(); }
+    // 关闭 TLS 连接与底层 fd（幂等）
     void close();                     // 幂等；尽力发 close_notify 后释放
+    // 返回底层 fd
     int  fd() const { return tcp_.fd(); }
+    // 返回底层 SSL*（未初始化为 nullptr）
     SSL* native_handle() const { return ssl_; }
 
 private:

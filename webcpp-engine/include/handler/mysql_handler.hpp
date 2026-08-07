@@ -41,7 +41,10 @@ std::string LanIp();
 // 注册到 MiddlewareManager 的 PreRequest 阶段，返回 403「局域网访问已关闭」。
 class LanGuardMiddleware : public Middleware {
 public:
+    // 返回中间件阶段：PreRequest
     Type GetType() const override { return Type::PreRequest; }
+    // 拦截局域网 IP Host 的请求并返回 403（localhost 放行）
+    // 参数：ctx - 请求上下文
     Response HandlePre(Context& ctx) override;
 };
 

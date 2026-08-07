@@ -5,6 +5,8 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+// 构造：通过 mmap 一次性预分配 256MB 虚拟内存作为区域池
+// 参数：无
 RegionPool::RegionPool() {
     void* p = mmap(nullptr, kPoolSize, PROT_READ | PROT_WRITE,
                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -18,12 +20,16 @@ RegionPool::RegionPool() {
     //         kPoolSize / 1024 / 1024, p);
 }
 
+// 析构：munmap 释放预分配的 256MB 内存
+// 参数：无
 RegionPool::~RegionPool() {
     if (base_) {
         munmap(base_, kPoolSize);
     }
 }
 
+// 获取一块至少 min_size 字节的区域（优先空闲链表 first-fit，后备 bump 分配）
+// 参数：min_size - 最小需求字节数；返回：{池内偏移, 实际容量}，失败为 {0,0}
 std::pair<size_t, size_t> RegionPool::Acquire(size_t min_size) {
     // Round up to kMinRegion alignment for freelist simplicity.
     size_t need = ((min_size + kMinRegion - 1) / kMinRegion) * kMinRegion;
@@ -49,12 +55,16 @@ std::pair<size_t, size_t> RegionPool::Acquire(size_t min_size) {
     return {offset, need};
 }
 
+// 归还区域到空闲链表，并触发相邻空闲块合并
+// 参数：offset - 池内偏移；size - 区域大小
 void RegionPool::Release(size_t offset, size_t size) {
     if (size == 0) return;
     free_.push_back({offset, size});
     Coalesce();
 }
 
+// 合并空闲链表中地址相邻的空闲块（每次 Release 后调用）
+// 参数：无
 void RegionPool::Coalesce() {
     if (free_.size() < 2) return;
 

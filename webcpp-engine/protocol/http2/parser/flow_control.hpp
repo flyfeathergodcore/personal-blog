@@ -18,25 +18,26 @@
 
 class H2FlowControl {
 public:
+    // 构造函数：初始化连接级窗口。
+    // 参数：initial_window - 初始窗口大小（字节，默认 65535）
     explicit H2FlowControl(uint32_t initial_window = 65535);
 
-    /// Reconfigure initial window size (from SETTINGS).
+    /// 重新配置初始窗口大小（来自 SETTINGS）。
     void SetInitialWindow(uint32_t size);
 
-    /// Record that @a n bytes have been received and consumed.
+    /// 记录已接收并消费 n 字节。
     void ConsumeBytes(uint32_t stream_id, uint32_t n);
 
-    /// True when it's time to send a WINDOW_UPDATE for this entity.
+    /// 是否该为该实体发送 WINDOW_UPDATE。
     bool ShouldUpdate(uint32_t stream_id) const;
 
-    /// Number of bytes to put in the WINDOW_UPDATE frame.
-    /// Calling this resets the consumed counter.
+    /// 应写入 WINDOW_UPDATE 帧的字节数；调用会清零已消费计数。
     uint32_t PopCredit(uint32_t stream_id);
 
-    /// Current available credit (for debugging).
+    /// 当前可用信用（调试用）。
     uint32_t Available(uint32_t stream_id) const;
 
-    /// Set peer's INITIAL_WINDOW_SIZE from SETTINGS.
+    /// 设置对端 SETTINGS 中的 INITIAL_WINDOW_SIZE。
     void SetPeerInitialWindow(uint32_t size);
 
 private:
@@ -49,5 +50,6 @@ private:
     WindowState conn_;   // stream_id = 0
     std::unordered_map<uint32_t, WindowState> streams_;
 
+    // 获取流窗口状态，不存在则按初始窗口创建（流 ID 0 = 连接级）。
     WindowState& GetOrCreate(uint32_t stream_id);
 };

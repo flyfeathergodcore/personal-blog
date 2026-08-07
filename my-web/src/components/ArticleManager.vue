@@ -104,7 +104,9 @@ const dialogVisible = ref(false)
 const editing = ref<Article | null>(null)
 const form = reactive<Article>({ id: '', title: '', summary: '', category: '', date: '', content: '', fileUrl: '', tags: [] })
 
-// 拉取列表：带分类筛选参数；同时刷新分类（新增分类后下拉即时出现）
+/**
+ * 拉取文章与分类列表：文章带分类筛选参数，同时刷新分类（新增分类后下拉即时出现）
+ */
 const fetchData = async () => {
   const [arts, cats] = await Promise.all([
     getArticles({ category: filterCategory.value || undefined }),
@@ -114,7 +116,10 @@ const fetchData = async () => {
   categories.value = cats
 }
 
-// 打开弹窗：row 有值编辑，否则新增；老数据无 tags 时兜底为空数组
+/**
+ * 打开新增/编辑弹窗：row 有值为编辑态，否则为新增态；老数据无 tags 时兜底为空数组
+ * @param row 待编辑的文章；不传则新增
+ */
 const openDialog = (row?: Article) => {
   editing.value = row || null
   Object.assign(form, row || { id: '', title: '', summary: '', category: '', date: '', content: '', fileUrl: '', tags: [] })
@@ -122,15 +127,20 @@ const openDialog = (row?: Article) => {
   dialogVisible.value = true
 }
 
-// md 上传内容填入表单，fileUrl（后端 data URL）随文章保存 → file_url 列
+/**
+ * md 上传回调：把上传内容与 fileUrl（后端 data URL）填入表单，标题为空时用文件名兜底
+ * @param payload 上传结果（文件名、内容、后端地址）
+ */
 const handleMdChange = (payload: { fileName: string; content: string; fileUrl: string }) => {
   form.content = payload.content
   form.fileUrl = payload.fileUrl
   if (!form.title) form.title = payload.fileName.replace(/\.md$/, '')
 }
 
-// 保存：新增传空 id（后端过滤为 NULL 走 AUTO_INCREMENT），编辑才带原 id。
-// 注意：不能传 Date.now() 作 id——13 位时间戳超出 INT 上限，会 500「Out of range value for column 'id'」
+/**
+ * 保存文章：新增传空 id（后端过滤为 NULL 走 AUTO_INCREMENT），编辑带原 id；
+ * 注意不能传 Date.now() 作 id——13 位时间戳超出 INT 上限会 500
+ */
 const handleSave = async () => {
   const catName = form.category.trim()
   if (!catName) {
@@ -152,6 +162,10 @@ const handleSave = async () => {
   }
 }
 
+/**
+ * 删除文章并刷新列表
+ * @param row 待删除的文章
+ */
 const handleDelete = async (row: Article) => {
   await deleteArticle(row.id)
   ElMessage.success('文章已删除')

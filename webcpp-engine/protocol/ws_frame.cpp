@@ -9,6 +9,8 @@
 // Sec-WebSocket-Accept = Base64(SHA1(client_key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
 // (RFC 6455 §4.2.2)
 
+// 计算 WebSocket 握手应答值 Sec-WebSocket-Accept（RFC 6455 §4.2.2）
+// 参数：client_key - 客户端发来的 Sec-WebSocket-Key；返回：Base64(SHA1(key + GUID))
 std::string ComputeWsAccept(std::string_view client_key)
 {
     // 1. Concatenate key + magic GUID

@@ -14,6 +14,7 @@ namespace {
 thread_local EventLoop* g_current_loop = nullptr;
 }  // namespace
 
+// 构造函数：创建非阻塞唤醒管道、平台 poller，并登记当前线程关联的事件循环
 EventLoop::EventLoop() {
     // 唤醒管道（非阻塞），post/stop 时写入以唤醒 poll 阻塞
     if (pipe(wake_fds_) == 0) {
@@ -27,6 +28,7 @@ EventLoop::EventLoop() {
     g_current_loop = this;
 }
 
+// 析构函数：stop 后统一销毁所有残留协程帧（含未追踪挂起点），关闭唤醒管道
 EventLoop::~EventLoop() {
     stop();
     // C1：收集所有残留帧统一销毁。
@@ -51,17 +53,20 @@ EventLoop::~EventLoop() {
     if (wake_fds_[1] >= 0) close(wake_fds_[1]);
 }
 
+// 获取当前线程关联的事件循环；未关联时惰性创建
 EventLoop& EventLoop::current() {
     // 若当前线程未关联 loop（例如从未构造），惰性创建
     if (!g_current_loop) new EventLoop();
     return *g_current_loop;
 }
 
+// 取当前单调时钟毫秒值（超时计算用）
 int64_t EventLoop::now_ms() const {
     using namespace std::chrono;
     return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
 }
 
+// 写唤醒管道，唤醒阻塞在 poll 中的线程
 void EventLoop::wake() {
     if (wake_fds_[1] >= 0) {
         // 只写一块 64 字节即可让阻塞在 poll 中的线程看到 LT 就绪事件。
@@ -75,6 +80,8 @@ void EventLoop::wake() {
     }
 }
 
+// 投递任务到队列，由任意 run() 线程执行；循环空闲时唤醒阻塞线程
+// 参数：h - 待执行的协程句柄
 void EventLoop::post(std::coroutine_handle<> h) {
     bool need_wake = false;
     {
@@ -86,6 +93,8 @@ void EventLoop::post(std::coroutine_handle<> h) {
     if (need_wake) wake();
 }
 
+// 协程完成后的统一销毁入口：入队销毁并登记存活帧（run() 不 drain 时 ~EventLoop 兜底回收）
+// 参数：h - 待销毁的协程句柄
 void EventLoop::post_destroy(std::coroutine_handle<> h) {
     bool need_wake = false;
     {
@@ -99,6 +108,8 @@ void EventLoop::post_destroy(std::coroutine_handle<> h) {
     if (need_wake) wake();
 }
 
+// 注册纯定时器：ms 毫秒后恢复 h
+// 参数：ms - 延时毫秒数；h - 协程句柄
 void EventLoop::wait_timer(int64_t ms, std::coroutine_handle<> h) {
     bool need_wake = false;
     {
@@ -110,6 +121,8 @@ void EventLoop::wait_timer(int64_t ms, std::coroutine_handle<> h) {
     if (need_wake) wake();
 }
 
+// 注册可取消定时器：ms 后恢复 h，可在到期前用 id 调 cancel_timer 作废
+// 参数：ms - 延时毫秒数；h - 协程句柄；id - 调用方分配的取消 id
 void EventLoop::wait_timer_cancelable(int64_t ms, std::coroutine_handle<> h, std::size_t id) {
     bool need_wake = false;
     {
@@ -123,6 +136,8 @@ void EventLoop::wait_timer_cancelable(int64_t ms, std::coroutine_handle<> h, std
     if (need_wake) wake();
 }
 
+// 作废可取消定时器：成功返回 true（调用方须自行 resume 协程），否则返回 false
+// 参数：id - 定时器登记 id
 bool EventLoop::cancel_timer(std::size_t id) {
     std::lock_guard<std::mutex> lock(mu_);
     // true = 本次取消成功（定时器到期将作废，调用方必须自行 resume 协程）；
@@ -130,6 +145,8 @@ bool EventLoop::cancel_timer(std::size_t id) {
     return live_timer_ids_.erase(id) != 0;
 }
 
+// 注册 fd 事件等待：就绪或超时（timeout_ms >= 0）时恢复 h；循环空闲时唤醒阻塞线程
+// 参数：fd - 文件描述符；ev - 事件组合；h - 协程句柄；timeout_ms - 超时毫秒数（-1 = 无限）；out_timed_out - 超时标志输出
 void EventLoop::wait_io(int fd, IoPoller::Event ev, std::coroutine_handle<> h,
                         int64_t timeout_ms, bool* out_timed_out) {
     bool need_wake = false;
@@ -151,11 +168,15 @@ void EventLoop::wait_io(int fd, IoPoller::Event ev, std::coroutine_handle<> h,
     if (need_wake) wake();
 }
 
+// 设置顶层协程未捕获异常的兜底回调
+// 参数：h - 回调函数
 void EventLoop::set_error_handler(std::function<void(std::exception_ptr)> h) {
     std::lock_guard<std::mutex> lock(mu_);
     error_handler_ = std::move(h);
 }
 
+// 通知顶层协程未捕获异常：有回调则在锁外调用，否则 stderr 兜底（绝不静默吞没）
+// 参数：e - 异常指针
 void EventLoop::notify_error(std::exception_ptr e) {
     // C2：顶层协程未捕获异常兜底。有回调则调用，否则 stderr 提示（绝不静默吞没）。
     // 回调在锁外执行，避免回调内部重入本循环（post/stop 等）时持锁。
@@ -171,6 +192,7 @@ void EventLoop::notify_error(std::exception_ptr e) {
     }
 }
 
+// 停止事件循环：置停止标志、收集并投递销毁挂起的 IO/定时器协程
 void EventLoop::stop() {
     std::vector<std::coroutine_handle<>> to_destroy;
     bool need_wake = false;
@@ -218,6 +240,7 @@ void EventLoop::stop() {
     if (need_wake) wake();
 }
 
+// 当前线程进入事件循环：执行任务/销毁队列、poll IO 与定时器，直到 stop() 后队列清空退出
 void EventLoop::run() {
     // 本线程进入循环后，current() 必须指向本循环。
     // 否则协程在本线程被 resume 时调用 sleep_for/stop 等，会经 thread_local
@@ -335,6 +358,8 @@ void EventLoop::run() {
     }
 }
 
+// 便捷版：共 num 个线程跑事件循环（调用者线程 + num-1 个后台线程），阻塞到 stop() 后全部退出
+// 参数：num - 线程总数（<= 0 直接返回）
 void EventLoop::run(int num) {
     if (num <= 0) return;
     std::vector<std::thread> threads;

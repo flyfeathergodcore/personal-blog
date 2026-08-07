@@ -8,6 +8,8 @@
 // Percentile computation
 // ═══════════════════════════════════════════════════════════════
 
+// 由延迟直方图桶计算 p50/p90/p99 分位数（桶内线性插值，末桶取固定扩展）
+// 参数：buckets - 各延迟桶的计数数组
 LatencyPercentiles ComputePercentiles(const uint64_t buckets[kLatencyBuckets])
 {
     LatencyPercentiles p{};
@@ -62,6 +64,8 @@ LatencyPercentiles ComputePercentiles(const uint64_t buckets[kLatencyBuckets])
 // AlertState
 // ═══════════════════════════════════════════════════════════════
 
+// 将告警状态序列化为 JSON 字符串
+// 参数：current_value - 当前指标值（写入 JSON 的 value 字段）
 std::string AlertState::ToJson(double current_value) const
 {
     std::string j = "{\"name\":\"";
@@ -78,6 +82,8 @@ std::string AlertState::ToJson(double current_value) const
 // MetricsCollector
 // ═══════════════════════════════════════════════════════════════
 
+// 构造：记录启动时间并初始化默认告警规则（错误率/P99/QPS 骤降）
+// 参数：num_workers - worker 数量
 MetricsCollector::MetricsCollector(int num_workers)
     : num_workers_(num_workers)
     , start_(std::chrono::steady_clock::now())
@@ -93,6 +99,8 @@ MetricsCollector::MetricsCollector(int num_workers)
         alert_states_[i].name = alert_rules_[i].name;
 }
 
+// 记录一次请求：累加请求/错误计数、发送字节，并按延迟归入分位桶
+// 参数：latency_us - 延迟（微秒）；status_code - 响应状态码；bytes - 发送字节数；wid - worker 编号；is_h2 - 是否 HTTP/2
 void MetricsCollector::OnRequest(uint64_t latency_us, int status_code,
                                   size_t bytes, int wid, bool is_h2)
 {
@@ -121,18 +129,24 @@ void MetricsCollector::OnRequest(uint64_t latency_us, int status_code,
     w.latency_buckets[bucket]++;
 }
 
+// 记录连接建立：对应 worker 的活动连接数 +1
+// 参数：wid - worker 编号
 void MetricsCollector::OnConnectionOpen(int wid)
 {
     if (wid < 0 || wid >= kMaxWorkers) return;
     workers_[wid].active_connections.fetch_add(1, std::memory_order_relaxed);
 }
 
+// 记录连接关闭：对应 worker 的活动连接数 -1
+// 参数：wid - worker 编号
 void MetricsCollector::OnConnectionClose(int wid)
 {
     if (wid < 0 || wid >= kMaxWorkers) return;
     workers_[wid].active_connections.fetch_sub(1, std::memory_order_relaxed);
 }
 
+// 周期刷屏：拷贝并清零该 worker 的计数快照写入环形缓冲（worker 0 额外采样活动连接与评估告警）
+// 参数：wid - worker 编号
 void MetricsCollector::Flush(int wid)
 {
     if (wid < 0 || wid >= kMaxWorkers) return;
@@ -190,6 +204,8 @@ void MetricsCollector::Flush(int wid)
         EvaluateAlerts(secs);
 }
 
+// 依据环形缓冲内窗口聚合数据评估各告警规则，更新告警触发状态
+// 参数：now_ts - 当前 Unix 秒时间戳
 void MetricsCollector::EvaluateAlerts(int64_t now_ts)
 {
     // Gather per-second totals over the window from the ring buffer
@@ -254,6 +270,7 @@ void MetricsCollector::EvaluateAlerts(int64_t now_ts)
     }
 }
 
+// 汇总全部 worker 当前活动连接数
 uint64_t MetricsCollector::ActiveConnections() const
 {
     uint64_t total = 0;
@@ -262,6 +279,7 @@ uint64_t MetricsCollector::ActiveConnections() const
     return total;
 }
 
+// 返回 steady_clock 的 Unix 秒时间戳（用于环形缓冲 slot 定位）
 int64_t MetricsCollector::CurrentTimestamp() const
 {
     return std::chrono::duration_cast<std::chrono::seconds>(
@@ -272,6 +290,9 @@ int64_t MetricsCollector::CurrentTimestamp() const
 // JSON rendering (full history)
 // ═══════════════════════════════════════════════════════════════
 
+// 向 JSON 追加一条历史数据点（含 h1/h2 拆分与分位数），非首条前加逗号换行
+// 参数：json - 目标字符串；ts - 时间戳；qps/err/bytes - 请求/错误/字节数；per - 分位数；
+//       act - 活动连接；first - 是否首条；qps_h1/qps_h2/err_h1/err_h2 - 协议拆分计数
 static void AppendJsonEntry(std::string& json, int64_t ts,
                              uint64_t qps, uint64_t err, uint64_t bytes,
                              const LatencyPercentiles& per,
@@ -308,6 +329,7 @@ static void AppendJsonEntry(std::string& json, int64_t ts,
     json += "}";
 }
 
+// 渲染完整指标 JSON：活动连接、运行时长、告警状态与环形缓冲历史
 std::string MetricsCollector::RenderMetricsJson() const
 {
     auto now = std::chrono::steady_clock::now();
@@ -371,6 +393,7 @@ std::string MetricsCollector::RenderMetricsJson() const
 // SSE delta rendering (single latest entry)
 // ═══════════════════════════════════════════════════════════════
 
+// 返回环形缓冲中最近一次刷屏的时间戳（无数据返回 0）
 int64_t MetricsCollector::LastFlushTimestamp() const
 {
     int64_t best = 0;
@@ -381,6 +404,8 @@ int64_t MetricsCollector::LastFlushTimestamp() const
     return best;
 }
 
+// 汇总最近 60s 指标窗口供落库（site_stats）：该分钟无访问则返回 false 跳过
+// 参数：out - 汇总输出（含真实系统时钟时间戳）；返回是否有有效数据
 bool MetricsCollector::SumLast60s(StatsWindow& out) const
 {
     out = StatsWindow{};
@@ -423,6 +448,8 @@ bool MetricsCollector::SumLast60s(StatsWindow& out) const
     return out.req != 0 || out.err != 0;
 }
 
+// 渲染最近一次刷屏快照的 JSON（供 SSE 增量推送），无新数据返回空串
+// 参数：since_ts - 上次推送时间戳，仅当最新刷屏晚于它时返回
 std::string MetricsCollector::RenderLatestSnapshot(int64_t since_ts) const
 {
     // Find the most recently flushed slot (highest timestamp),
@@ -477,6 +504,8 @@ std::string MetricsCollector::RenderLatestSnapshot(int64_t since_ts) const
 // SSE: fired alerts delta
 // ═══════════════════════════════════════════════════════════════
 
+// 渲染告警状态变化的 SSE delta（仅输出触发状态发生变化且新近触发的告警）
+// 参数：prev - 上一次的告警状态列表；返回 SSE 文本（无变化则为空串）
 std::string MetricsCollector::RenderAlertDelta(
     const std::vector<AlertState>& prev) const
 {

@@ -12,9 +12,13 @@
 #include <string>
 #include <utility>
 #include <vector>
+#ifdef __linux__
 #include <sys/sendfile.h>
+#endif
 #include <unistd.h>
 
+// 计算自给定时间点至今经过的微秒数（用于指标耗时统计）
+// 参数：start - 起始时间点
 static uint64_t dur_us(std::chrono::steady_clock::time_point start)
 {
     return static_cast<uint64_t>(
@@ -22,6 +26,8 @@ static uint64_t dur_us(std::chrono::steady_clock::time_point start)
             std::chrono::steady_clock::now() - start).count());
 }
 
+// 构造函数：保存连接流与路由/中间件引用，按需初始化请求区域池
+// 参数：stream - 连接流（TCP/TLS）；router - 路由表；middleware - 中间件管理器；region_pool - 请求区域池（可空）
 template<typename Stream>
 H11Session<Stream>::H11Session(Stream stream,
                                Router& router,
@@ -34,6 +40,9 @@ H11Session<Stream>::H11Session(Stream stream,
         region_.Init(region_pool);
 }
 
+// 主协程：HTTP/1.1 会话生命周期入口。循环执行 读→解析→中间件→路由→处理→发送，
+// 支持 keep-alive 与 pipeline，直到连接关闭或出错
+// 参数：无（基于成员状态）
 template<typename Stream>
 coro::Task<void> H11Session<Stream>::Start()
 {
@@ -215,7 +224,8 @@ coro::Task<void> H11Session<Stream>::Start()
     co_return;
 }
 
-// ── WriteError (known code) ──
+// 向对端写入固定状态码的错误响应（400/413/426/500），每次连接至多一次
+// 参数：code - HTTP 状态码（其他取值按 500 处理）
 template<typename Stream>
 coro::Task<void> H11Session<Stream>::WriteError(int code)
 {
@@ -252,7 +262,8 @@ coro::Task<void> H11Session<Stream>::WriteError(int code)
     co_return;
 }
 
-// ── WriteError (pre-built Response) ──
+// 向对端写入中间件/自定义构造的完整响应（raw middleware 或 101 upgrade）
+// 参数：response - 预构造的响应对象
 template<typename Stream>
 coro::Task<void> H11Session<Stream>::WriteError(Response response)
 {
@@ -266,6 +277,8 @@ coro::Task<void> H11Session<Stream>::WriteError(Response response)
     co_return;
 }
 
+// 发送完整响应：文件走 sendfile/read 零拷贝、流走 SSE 推送循环、普通响应头+体合并写
+// 参数：response - 待发送的响应对象
 template<typename Stream>
 coro::Task<void> H11Session<Stream>::Send(Response response)
 {
@@ -281,6 +294,7 @@ coro::Task<void> H11Session<Stream>::Send(Response response)
 
         if constexpr (std::is_same_v<Stream, net::TcpStream>)
         {
+#ifdef __linux__
             off_t offset = static_cast<off_t>(range_off);
             while (remaining > 0) {
                 ssize_t n = ::sendfile(stream_.fd(), fd, &offset, remaining);
@@ -296,6 +310,21 @@ coro::Task<void> H11Session<Stream>::Send(Response response)
                 if (n == 0) break;
                 remaining -= static_cast<size_t>(n);
             }
+#else
+            // macOS 无 Linux 版 sendfile（签名与语义不同），退化为 read+write
+            // 循环（同下方通用流路径），牺牲零拷贝换取可移植性。
+            ::lseek(fd, static_cast<off_t>(range_off), SEEK_SET);
+            std::array<char, 65536> readbuf;
+            while (remaining > 0) {
+                auto to_read = std::min(remaining, readbuf.size());
+                ssize_t n = ::read(fd, readbuf.data(), to_read);
+                if (n <= 0) break;
+                if (!(co_await stream_.write_all(
+                        {readbuf.data(), static_cast<size_t>(n)})))
+                    break;
+                remaining -= static_cast<size_t>(n);
+            }
+#endif
         }
         else
         {

@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 
+// 析构：关闭所有已打开的文件描述符
 FileCache::~FileCache()
 {
     int closed = 0;
@@ -19,6 +20,8 @@ FileCache::~FileCache()
         std::cout << "[cache] 关闭 " << closed << " 个文件 fd" << std::endl;
 }
 
+// 递归扫描 doc_root 下所有文件并载入缓存（记录 mime/fd/大小/mtime）
+// 参数：doc_root - 静态文件根目录
 void FileCache::LoadDirectory(const std::string& doc_root)
 {
     doc_root_ = doc_root;
@@ -81,12 +84,16 @@ void FileCache::LoadDirectory(const std::string& doc_root)
               << fd_count << " 个 fd 已打开" << std::endl;
 }
 
+// 按路径查找缓存的文件；未命中返回 nullptr
+// 参数：path - 请求路径（如 "/index.html"）
 const CachedFile* FileCache::Get(const std::string& path) const
 {
     auto it = files_.find(path);
     return it != files_.end() ? &it->second : nullptr;
 }
 
+// 根据文件扩展名判断 MIME 类型
+// 参数：p - 文件路径；返回对应 MIME 字符串
 std::string FileCache::DetectMime(const fs::path& p)
 {
     auto ext = p.extension().string();

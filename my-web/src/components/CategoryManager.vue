@@ -27,10 +27,16 @@ import type { Category } from '../api/blog'
 const categories = ref<Category[]>([])
 const newName = ref('')
 
+/**
+ * 拉取分类列表
+ */
 const fetchData = async () => {
   categories.value = await getCategories()
 }
 
+/**
+ * 添加分类：名称非空校验；传空 id 让后端走 INSERT + AUTO_INCREMENT
+ */
 const handleAdd = async () => {
   const name = newName.value.trim()
   if (!name) return
@@ -46,6 +52,10 @@ const handleAdd = async () => {
   }
 }
 
+/**
+ * 删除分类并刷新列表
+ * @param row 待删除的分类
+ */
 const handleDelete = async (row: Category) => {
   await deleteCategory(row.id)
   ElMessage.success('分类已删除（mock 演示）')

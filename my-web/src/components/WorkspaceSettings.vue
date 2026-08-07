@@ -83,16 +83,25 @@ const lanEnabled = ref(false)
 const lanLoading = ref(false)
 // 宿主机局域网 IP：build-run.sh 注入 HOST_LAN_IP，后端返回；为空时 WebRTC 兜底
 const lanIp = ref('')
-// 访问端口跟随当前页面（生产 8443，本地 dev 5173）
+/**
+ * 访问端口：跟随当前页面（生产 8443，本地 dev 5173）
+ */
 const port = computed(() => window.location.port || '8443')
-// 局域网访问地址（开启时展示给附近设备）
+/**
+ * 局域网访问地址（开启时展示给附近设备）；无 IP 时为空
+ */
 const lanUrl = computed(() =>
   lanIp.value ? `http://${lanIp.value}:${port.value}` : ''
 )
-// 本机访问地址（关闭时提示用）
+/**
+ * 本机访问地址（关闭局域网时提示用）
+ */
 const localUrl = computed(() => window.location.origin)
 
-// 切换开关：调后端持久化，失败回滚
+/**
+ * 切换局域网访问开关：调后端持久化，失败则回滚开关状态
+ * @param val 目标开关状态
+ */
 const handleLanChange = async (val: boolean) => {
   lanLoading.value = true
   try {
@@ -109,7 +118,9 @@ const handleLanChange = async (val: boolean) => {
   }
 }
 
-// 复制访问地址
+/**
+ * 复制局域网访问地址到剪贴板；失败时提示手动复制
+ */
 const copyLanUrl = async () => {
   try {
     await navigator.clipboard.writeText(lanUrl.value)
@@ -119,8 +130,11 @@ const copyLanUrl = async () => {
   }
 }
 
-// WebRTC 兜底：宿主机局域网 IP（后端 HOST_LAN_IP 未注入时使用）
-// 仅在安全上下文（https / localhost）可用，取非回环的局域网地址
+/**
+ * WebRTC 兜底探测宿主机局域网 IP（后端 HOST_LAN_IP 未注入时使用）；
+ * 仅安全上下文（https / localhost）可用，取非回环的局域网地址
+ * @returns 解析出的局域网 IP，失败或超时返回空字符串
+ */
 const detectLanIpByWebRTC = (): Promise<string> =>
   new Promise((resolve) => {
     try {
@@ -157,14 +171,19 @@ const detectLanIpByWebRTC = (): Promise<string> =>
     }
   })
 
-// 局域网 IP 实时探测：WebRTC 优先（换网后 IP 变化也能拿到当前值），
-// 失败才回落后端注入值（HOST_LAN_IP，启动时获取，可能过期）
+/**
+ * 局域网 IP 实时探测：WebRTC 优先（换网后也能拿到当前值），失败时回落后端注入值
+ * @param fallback 后端注入的兜底 IP
+ * @returns 探测到的最新局域网 IP
+ */
 const refreshLanIp = async (fallback: string): Promise<string> => {
   const real = await detectLanIpByWebRTC()
   return real || fallback
 }
 
-// 初始化：读后端当前开关状态；开启时总是用 WebRTC 实时探测覆盖后端旧值
+/**
+ * 初始化：读取后端当前开关状态；开启时用 WebRTC 实时探测覆盖后端旧值
+ */
 const loadLanStatus = async () => {
   try {
     const st = await getLanStatus()
@@ -196,7 +215,9 @@ const emit = defineEmits(['update:modelValue'])
 // 本地编辑副本：编辑过程不触碰父组件数据，保存时一次性提交
 const localItems = ref<WorkItem[]>([])
 
-// 同步外部数据到本地副本（深拷贝，避免直接修改 props 内部对象）
+/**
+ * 同步外部 modelValue 到本地编辑副本（深拷贝，避免直接修改 props 内部对象）
+ */
 watch(
   () => props.modelValue,
   (val) => {
@@ -205,30 +226,41 @@ watch(
   { immediate: true }
 )
 
-// 是否有未保存的更改
+/**
+ * 是否存在未保存的更改：本地副本与外部数据序列化后不一致即为脏
+ */
 const dirty = computed(
   () => JSON.stringify(localItems.value) !== JSON.stringify(props.modelValue)
 )
 
-// 添加子栏：编号自动递增，跳转链接默认空（点击时不跳转）
+/**
+ * 添加子栏：编号自动递增，跳转链接默认留空（点击时不跳转）
+ */
 const addItem = () => {
   const next = localItems.value.length + 1
   localItems.value.push({ label: `item ${next}`, index: `4-${next}`, path: '' })
 }
 
-// 删除指定子栏（至少保留一项）
+/**
+ * 删除指定子栏（至少保留一项）
+ * @param index 待删除子栏的唯一标识
+ */
 const removeItem = (index: string) => {
   if (localItems.value.length <= 1) return
   const i = localItems.value.findIndex((item) => item.index === index)
   if (i !== -1) localItems.value.splice(i, 1)
 }
 
-// 保存：把副本提交给父组件
+/**
+ * 保存：把本地编辑副本提交给父组件（v-model 更新）
+ */
 const save = () => {
   emit('update:modelValue', localItems.value.map((item) => ({ ...item })))
 }
 
-// 重置：放弃本地修改，恢复为父组件传入的数据
+/**
+ * 重置：放弃本地修改，恢复为父组件传入的数据
+ */
 const reset = () => {
   localItems.value = props.modelValue.map((item) => ({ ...item }))
 }

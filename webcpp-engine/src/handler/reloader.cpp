@@ -1,19 +1,24 @@
 #include "handler/reloader.hpp"
 #include "router/router.hpp"
 #include <iostream>
-#include <sys/inotify.h>
 #include <unistd.h>
 #include <poll.h>
 
+#ifdef __linux__
+#include <sys/inotify.h>
 static constexpr size_t kEventBufSize = sizeof(struct inotify_event) + NAME_MAX + 1;
+#endif
 
 using RegisterFunc = void (*)(Router&);
 
+// 构造：保存待监控目录与路由目标
+// 参数：watch_dirs - 要监控的插件目录列表；router - 路由注册目标
 HotReloader::HotReloader(std::vector<std::string> watch_dirs, Router& router)
     : watch_dirs_(std::move(watch_dirs))
     , router_(router)
 {}
 
+// 析构：停止监控线程，关闭所有已加载与过期的动态库句柄
 HotReloader::~HotReloader()
 {
     Stop();
@@ -25,12 +30,14 @@ HotReloader::~HotReloader()
     }
 }
 
+// 启动监控线程（幂等：已在运行则直接返回）
 void HotReloader::Start()
 {
     if (running_.exchange(true)) return;
     thread_ = std::thread(&HotReloader::WatchLoop, this);
 }
 
+// 停止监控线程并等待其退出（幂等）
 void HotReloader::Stop()
 {
     if (!running_.exchange(false)) return;
@@ -38,28 +45,16 @@ void HotReloader::Stop()
         thread_.join();
 }
 
+// 监控线程主循环：检测目录下 .so 变化并触发 Reload。
+// Linux 用 inotify 事件（实时）；macOS/BSD 无 inotify，退化为纯 stat 轮询
+// （延迟 ≤ 5s，对 .so 热重载场景可接受）。
 void HotReloader::WatchLoop()
 {
-    int inotify_fd = ::inotify_init1(IN_NONBLOCK);
-    if (inotify_fd < 0) {
-        std::cerr << "[reloader] inotify_init1 失败" << std::endl;
-        return;
-    }
-
-    // ── 首次加载所有已有的 .so ──
     namespace fs = std::filesystem;
+
+    // ── 首次加载所有已有的 .so（平台无关）──
     for (auto& dir : watch_dirs_) {
         if (!fs::is_directory(dir)) continue;
-
-        // 监控目录
-        int wd = ::inotify_add_watch(inotify_fd, dir.c_str(),
-                                      IN_CLOSE_WRITE | IN_MOVED_TO | IN_CREATE);
-        if (wd < 0) {
-            std::cerr << "[reloader] inotify_add_watch 失败: " << dir << std::endl;
-            continue;
-        }
-
-        // 遍历已有 .so 文件
         for (auto& entry : fs::directory_iterator(dir)) {
             if (entry.path().extension() != ".so") continue;
             auto path = entry.path().string();
@@ -70,9 +65,7 @@ void HotReloader::WatchLoop()
         }
     }
 
-    // ── 事件循环 ──
-    char buf[kEventBufSize * 32];  // 放大缓冲区，一次读多个事件
-    uint64_t tick = 0;
+    // 检测目录下 .so 的 mtime 变化并触发 Reload（平台无关）
     auto check_dir = [&](const std::string& dir) {
         if (!fs::is_directory(dir)) return;
         for (auto& entry : fs::directory_iterator(dir)) {
@@ -87,6 +80,27 @@ void HotReloader::WatchLoop()
         }
     };
 
+#ifdef __linux__
+    // ── inotify 事件循环 ──
+    int inotify_fd = ::inotify_init1(IN_NONBLOCK);
+    if (inotify_fd < 0) {
+        std::cerr << "[reloader] inotify_init1 失败" << std::endl;
+        return;
+    }
+
+    // 监控目录
+    for (auto& dir : watch_dirs_) {
+        if (!fs::is_directory(dir)) continue;
+        int wd = ::inotify_add_watch(inotify_fd, dir.c_str(),
+                                      IN_CLOSE_WRITE | IN_MOVED_TO | IN_CREATE);
+        if (wd < 0) {
+            std::cerr << "[reloader] inotify_add_watch 失败: " << dir << std::endl;
+            continue;
+        }
+    }
+
+    char buf[kEventBufSize * 32];  // 放大缓冲区，一次读多个事件
+    uint64_t tick = 0;
     while (running_.load()) {
         struct pollfd pfd = {inotify_fd, POLLIN, 0};
         int ret = ::poll(&pfd, 1, 1000);  // 1秒超时，用于检查 running_
@@ -145,8 +159,22 @@ void HotReloader::WatchLoop()
     }
 
     ::close(inotify_fd);
+#else
+    // ── macOS/BSD：无 inotify，退化为纯 stat 轮询（延迟 ≤ 5s）──
+    uint64_t tick = 0;
+    while (running_.load()) {
+        ::poll(nullptr, 0, 1000);  // 1s tick，以可中断方式检查 running_
+        ++tick;
+        if (tick % 5 == 0) {
+            for (auto& dir : watch_dirs_) check_dir(dir);
+        }
+    }
+#endif
 }
 
+// 热重载单个 .so：复制到临时路径 dlopen（绕过 dlopen 按路径缓存旧句柄），
+// 注册新路由后保留旧句柄（in-flight handler 仍需其代码）
+// 参数：path - 发生变化的插件 .so 路径
 void HotReloader::Reload(const std::string& path)
 {
     std::cout << "[reloader] 检测到变化: " << path << std::endl;

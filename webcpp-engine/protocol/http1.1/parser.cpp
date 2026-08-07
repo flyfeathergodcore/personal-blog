@@ -2,9 +2,13 @@
 #include <cctype>
 #include <cstring>
 
+// 默认构造解析器
 H1Parser::H1Parser() = default;
+// 默认析构解析器
 H1Parser::~H1Parser() = default;
 
+// 向解析器喂入数据，按状态机增量解析 HTTP/1.1 请求
+// 参数：data - 输入数据指针；len - 输入长度（字节）；返回：Complete/Incomplete/Error
 ParseResult H1Parser::Feed(const char* data, size_t len)
 {
     if (state_ == REQUEST_LINE && line_len_ == 0 && len >= 15) {
@@ -110,6 +114,8 @@ ParseResult H1Parser::Feed(const char* data, size_t len)
     return ParseResult::Incomplete;
 }
 
+// 复位 per-message 解析状态（不清连接级 h2 检测标志）
+// 参数：无
 void H1Parser::ResetMessage()
 {
     // 复位 per-message 解析状态。与 Feed 中 DONE/ERROR 的自复位逻辑一致。
@@ -123,6 +129,8 @@ void H1Parser::ResetMessage()
     consumed_ = 0;
 }
 
+// 完整复位解析器（per-message 状态 + 连接级 h2 检测标志），供会话池复用壳前调用
+// 参数：无
 void H1Parser::Reset()
 {
     // 会话池复用壳前调用：除 per-message 状态外，连接级 h2 检测标志一并清零，
@@ -131,6 +139,8 @@ void H1Parser::Reset()
     h2_detected_ = false;
 }
 
+// 处理一行解析结果：按当前状态分发到请求行/请求头/空行收尾逻辑
+// 参数：无；返回：true 成功，false 解析错误
 bool H1Parser::ProcessLine()
 {
     if (state_ == REQUEST_LINE)
@@ -161,6 +171,8 @@ bool H1Parser::ProcessLine()
     return false;
 }
 
+// 解析请求行（方法 路径 版本），路径复制到区域池
+// 参数：无；返回：true 成功，false 格式错误
 bool H1Parser::ParseRequestLine()
 {
     char* p = line_buf_;
@@ -193,6 +205,8 @@ bool H1Parser::ParseRequestLine()
     return true;
 }
 
+// 解析单个请求头行（名称: 值），名称转小写并复制到区域池，识别 Content-Length
+// 参数：无；返回：true 成功，false 格式错误
 bool H1Parser::ParseHeaderLine()
 {
     char* colon = std::strchr(line_buf_, ':');
@@ -234,6 +248,8 @@ bool H1Parser::ParseHeaderLine()
     return true;
 }
 
+// 将请求体数据拷贝到区域池预留的 body 区域
+// 参数：data - 输入数据指针；len - 本次可写字节数
 void H1Parser::WriteBody(const char* data, size_t len)
 {
     if (len == 0 || body_.len == 0) return;
@@ -247,18 +263,24 @@ void H1Parser::WriteBody(const char* data, size_t len)
     body_written_ += copy;
 }
 
+// 获取解析出的请求路径（区域池视图）
+// 参数：无
 std::string_view H1Parser::Path() const
 {
     auto* r = Pool();
     return r ? r->ToView(path_) : std::string_view{};
 }
 
+// 获取解析出的请求体（区域池视图）
+// 参数：无
 std::string_view H1Parser::Body() const
 {
     auto* r = Pool();
     return r ? r->ToView(body_) : std::string_view{};
 }
 
+// 按名称查询请求头（遍历已存头部，区域池视图）
+// 参数：key - 头部名称；返回：值，未找到返回空
 std::string_view H1Parser::Header(const std::string_view key) const
 {
     auto* r = Pool();

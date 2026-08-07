@@ -33,22 +33,36 @@ struct H2WsWakeup {
 //
 class H2StreamContext : public Context {
 public:
+    // 默认构造函数。
     H2StreamContext() = default;
 
+    // 设置请求方法（:method 伪头）。
     void SetMethod(std::string_view m);
+    // 设置请求路径（:path 伪头）。
     void SetPath(std::string_view p);
+    // 添加请求头：伪头特殊处理，普通头存入数组并跟踪 Content-Length。
     void AddHeader(std::string_view name, std::string_view value);
+    // 追加请求体数据（跨多个 DATA 帧累积）。
     void AppendBody(const uint8_t* data, size_t len);
 
     // ── Context interface ──
+    // H2 流无需按字节喂入解析器，直接返回完成。
     ParseResult Feed(const char*, size_t) override { return ParseResult::Complete; }
+    // 获取请求方法。
     std::string_view Method()  const override;
+    // 获取请求路径。
     std::string_view Path()    const override;
+    // 获取协议版本。
     std::string_view Version() const override { return "HTTP/2"; }
+    // 是否 HTTP/2 请求。
     bool IsHttp2() const override { return true; }
+    // 按名称查找请求头。
     std::string_view Header(std::string_view key) const override;
+    // 获取完整请求体。
     std::string_view Body()   const override;
+    // 返回请求头数量。
     int HeaderCount() const override { return header_count_; }
+    // 按下标取第 i 个请求头的 (名称, 值) 对，越界返回空对。
     std::pair<std::string_view, std::string_view> HeaderAt(int i) const override {
         if (i < 0 || i >= header_count_) return {};
         auto* r = Pool();
@@ -56,7 +70,7 @@ public:
                  : std::pair<std::string_view, std::string_view>{};
     }
 
-    /// Content-Length from the request headers.
+    /// 返回请求头中的 Content-Length 值。
     size_t ContentLength() const { return content_length_; }
 
     // ── Response body source (for DATA frames) ──

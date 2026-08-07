@@ -76,10 +76,15 @@ const panels: Record<string, Component> = {
   '3-4': ColorSettings,
   '3-5': SiteSettings
 }
+/**
+ * 当前侧边栏选中项对应的面板组件（无对应则返回 null 显示空状态）
+ */
 const activePanel = computed<Component | null>(() => panels[sidebarActive.value] || null)
 
-// 工作区子栏数据（数据驱动渲染；默认值，后台「站点设置」面板可编辑并持久化）
-// 从 localStorage 回读，保证后台保存后刷新仍生效
+/**
+ * 读取工作区子栏数据：从 localStorage 回读（后台「站点设置」可编辑），无数据时返回默认值
+ * @returns 工作区子栏配置数组
+ */
 const loadWorkItems = (): { label: string; index: string; path: string }[] => {
   const defaults = [
     { label: 'item one', index: '4-1', path: '/aichat' },
@@ -101,6 +106,10 @@ const workItems = ref(loadWorkItems())
 const menuBgColor = ref(localStorage.getItem('blogNavBgColor') || '')
 const menuTextColor = ref(localStorage.getItem('blogNavTextColor') || '')
 
+/**
+ * 顶栏菜单选择处理：工作区子栏跳转链接，主页/后台/退出特殊处理，其余切换激活菜单
+ * @param data 菜单选中项（key 为菜单 index）
+ */
 const handleMenuSelect = (data: { key: string; keyPath: string[] }) => {
   // 工作区子栏点击：跳转到配置的链接（路由跳转 / 外部链接新窗口）
   const workItem = workItems.value.find((i) => i.index === data.key)
@@ -135,7 +144,10 @@ const handleMenuSelect = (data: { key: string; keyPath: string[] }) => {
   activeMenu.value = data.key
 }
 
-// 接收侧边栏选中通知
+/**
+ * 接收侧边栏选中通知并更新激活面板
+ * @param data 侧边栏选中项（key 为菜单 index）
+ */
 const handleSidebarSelect = (data: { key: string; keyPath: string[] }) => {
   console.log('侧边栏菜单选择:', data)
   sidebarActive.value = data.key

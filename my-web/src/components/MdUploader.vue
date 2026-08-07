@@ -42,8 +42,11 @@ const fileName = ref('')
 const mdContent = ref('')
 const fileUrl = ref('')
 
-// 真实上传：先调后端 /api/upload/md 持久化（multipart → data URL 入库），
-// 成功后再本地读一遍文本填入表单，方便直接编辑/保存内容
+/**
+ * 真实上传：先调后端 /api/upload/md 持久化（multipart → data URL 入库），
+ * 成功后再本地读一遍文本，通过 change 事件通知父组件
+ * @param options el-upload 的请求配置（含文件与回调）
+ */
 const handleUpload = async (options: UploadRequestOptions) => {
   try {
     const res = await uploadMarkdown(options.file)
@@ -65,7 +68,9 @@ const handleUpload = async (options: UploadRequestOptions) => {
   reader.readAsText(options.file)
 }
 
-// 清除当前文档，恢复空内容
+/**
+ * 清除当前文档并通知父组件内容已清空
+ */
 const handleClear = () => {
   fileName.value = ''
   mdContent.value = ''

@@ -11,6 +11,8 @@
 /// 与合法的零长度 Text/Binary 数据帧明确区分。
 class WsEchoHandler : public RequestHandler {
 public:
+    // 处理 WS 升级握手：校验 sec-websocket-key 并返回 101 升级响应
+    // 参数：ctx - 请求上下文
     Response Handle(const Context& ctx) override {
         auto ws_key = ctx.Header("sec-websocket-key");
         if (!ws_key.empty()) {
@@ -20,6 +22,8 @@ public:
         return Response::Error(404, *ctx.Pool());
     }
 
+    // 回显循环：持续读取帧并原样回写，收到 Close 帧即结束
+    // 参数：ctx - 原始升级请求上下文；conn - WebSocket 连接
     coro::Task<void> HandleWebSocket(const Context& /*ctx*/,
                                      WsConnectionBase& conn) override
     {

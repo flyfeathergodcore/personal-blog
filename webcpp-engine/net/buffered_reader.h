@@ -16,9 +16,16 @@ namespace net {
 
 class BufferedReader {
 public:
+    // 构造：绑定底层流并预留缓冲容量（默认 16KB）
+    // 参数：s - 底层 TcpStream 引用；cap - 缓冲预分配容量（字节）
     explicit BufferedReader(TcpStream& s, size_t cap = 16384);
+    // 按分隔符读取：跨读累积缓冲，命中 delim 时返回其前全部数据
+    // 参数：delim - 分隔符；out - 输出
     coro::Task<IoResult> read_until(std::string_view delim, std::string& out);
+    // 精确读取 n 字节（先消费缓冲，再补读流）
+    // 参数：n - 需读取字节数；out - 输出
     coro::Task<IoResult> read_exact(size_t n, std::string& out);
+    // 返回已缓冲未消费的数据视图
     std::string_view buffered() const;      // 已缓冲未消费数据
 private:
     TcpStream& s_;

@@ -33,12 +33,18 @@
 namespace detail {
 
 // 探测复位函数：优先 Reset() → Clear() → clear()
+// 复位对象：最高优先级，调用自定义 Reset()
+// 参数：obj - 待复位对象
 template<typename T>
 auto CallReset(T& obj, int) -> decltype(obj.Reset(), void()) { obj.Reset(); }
 
+// 复位对象：次优先级，调用 protobuf Message 的 Clear()
+// 参数：obj - 待复位对象
 template<typename T>
 auto CallReset(T& obj, long) -> decltype(obj.Clear(), void()) { obj.Clear(); }
 
+// 复位对象：兜底，调用 STL 容器的 clear()
+// 参数：obj - 待复位对象
 template<typename T>
 auto CallReset(T& obj, ...) -> decltype(obj.clear(), void()) { obj.clear(); }
 
@@ -50,19 +56,26 @@ public:
     // RAII 句柄：析构时自动归还对象
     class PooledObject {
     public:
+        // 默认构造（空句柄）
         PooledObject() = default;
+        // 构造 RAII 句柄：绑定被管理对象与所属对象池
+        // 参数：obj - 被管理的对象指针；pool - 所属对象池
         PooledObject(T* obj, ObjectPool* pool)
             : obj_(obj), pool_(pool) {}
 
-        // 禁止拷贝
+        // 禁止拷贝构造
         PooledObject(const PooledObject&) = delete;
+        // 禁止拷贝赋值
         PooledObject& operator=(const PooledObject&) = delete;
 
-        // 允许移动
+        // 允许移动构造（转移所有权，源句柄置空）
+        // 参数：o - 被移动的句柄
         PooledObject(PooledObject&& o) noexcept
             : obj_(o.obj_), pool_(o.pool_) {
             o.obj_ = nullptr;
         }
+        // 移动赋值（先归还旧对象，再转移所有权）
+        // 参数：o - 被移动的句柄
         PooledObject& operator=(PooledObject&& o) noexcept {
             if (this != &o) {
                 release();
@@ -73,16 +86,25 @@ public:
             return *this;
         }
 
+        // 析构：自动复位并归还对象到池
         ~PooledObject() { release(); }
 
+        // 指针访问（非 const）
         T* operator->() { return obj_; }
+        // 解引用访问（非 const）
         T& operator*()  { return *obj_; }
+        // 指针访问（const）
         const T* operator->() const { return obj_; }
+        // 解引用访问（const）
         const T& operator*()  const { return *obj_; }
 
+        // 判断句柄是否持有有效对象
+        // 参数：无
         bool valid() const { return obj_ != nullptr; }
 
     private:
+        // 复位并归还对象到池，随后置空指针（析构与移动赋值共用）
+        // 参数：无
         void release() {
             if (obj_ && pool_) {
                 detail::CallReset(*obj_, 0);
@@ -95,17 +117,22 @@ public:
         ObjectPool*  pool_ = nullptr;
     };
 
+    // 默认构造对象池
     ObjectPool() = default;
+    // 析构：删除池中所有空闲对象
     ~ObjectPool() {
         for (size_t i = 0; i < top_; i++) {
             delete stack_[i];
         }
     }
 
+    // 禁止拷贝
     ObjectPool(const ObjectPool&) = delete;
+    // 禁止拷贝赋值
     ObjectPool& operator=(const ObjectPool&) = delete;
 
     // 从池中获取对象（池空则新建），返回 RAII 句柄
+    // 参数：无；返回：PooledObject 句柄（离开作用域自动复位归还）
     PooledObject Acquire() {
         T* obj = nullptr;
         {
@@ -123,19 +150,24 @@ public:
         return {obj, this};
     }
 
-    // 统计：已创建对象总数
+    // 统计：已创建对象总数（含池满被删除的）
+    // 参数：无
     size_t Created() const { return created_.load(std::memory_order_relaxed); }
 
     // 统计：复用次数
+    // 参数：无
     size_t Reused() const { return reused_.load(std::memory_order_relaxed); }
 
     // 当前空闲对象数
+    // 参数：无
     size_t FreeCount() const {
         std::lock_guard<std::mutex> lock(mu_);
         return top_;
     }
 
 private:
+    // 归还对象到池：池未满入栈复用，池满直接删除防止无限增长
+    // 参数：obj - 待归还的对象指针
     void Return(T* obj) {
         std::lock_guard<std::mutex> lock(mu_);
         if (top_ < Capacity) {

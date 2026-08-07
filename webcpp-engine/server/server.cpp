@@ -7,12 +7,16 @@
 #include <csignal>
 #include <memory>
 
+// 构造函数：保存配置、路由、中间件与 TLS 上下文
+// 参数：cfg - 服务配置；router - 路由表；middleware - 中间件管理器；tls - TLS 上下文
 Server::Server(const Config& cfg,
                Router& router,
                MiddlewareManager& middleware,
                std::shared_ptr<net::TlsContext> tls)
     : ServerBase(cfg, router, middleware, std::move(tls)) {}
 
+// 启动单 worker 服务：接管信号、打开监听 socket、跑事件循环直至优雅关闭
+// 参数：无
 void Server::Start()
 {
     ::signal(SIGPIPE, SIG_IGN);
@@ -38,6 +42,8 @@ void Server::Start()
     Logger::Log(LogLevel::Info, "SERVER", "已完全停止");
 }
 
+// 监听协程：循环 accept 新连接并 post 到事件循环处理，直到 shutdown
+// 参数：无
 coro::Task<void> Server::Listen()
 {
     while (!shutdown_) {
@@ -60,6 +66,8 @@ coro::Task<void> Server::Listen()
     co_return;
 }
 
+// 处理 TLS 连接：握手后按 ALPN 选择 H1 会话（H2 未移植则回 426）并驱动 Start()
+// 参数：tcp - 已 accept 的 TCP 流
 coro::Task<void> Server::HandleTls(net::TcpStream tcp)
 {
     net::TlsStream ss(std::move(tcp), tls_->NativeContext());
@@ -92,6 +100,8 @@ coro::Task<void> Server::HandleTls(net::TcpStream tcp)
     co_return;
 }
 
+// 处理明文 HTTP/1.1 连接：直接新建 H1 会话并驱动 Start()
+// 参数：tcp - 已 accept 的 TCP 流
 coro::Task<void> Server::HandlePlain(net::TcpStream tcp)
 {
     auto session = std::make_shared<H11Session<net::TcpStream>>(
@@ -108,6 +118,8 @@ coro::Task<void> Server::HandlePlain(net::TcpStream tcp)
     co_return;
 }
 
+// 信号等待协程：收到 SIGINT/SIGTERM 后触发优雅关闭（等待会话排空）并停止事件循环
+// 参数：无
 coro::Task<void> Server::SignalLoop()
 {
     for (;;) {

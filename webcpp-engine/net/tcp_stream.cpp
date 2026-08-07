@@ -20,6 +20,7 @@ static ssize_t try_read(int fd, void* buf, size_t n) {
     }
 }
 
+// 构造函数：接管连接 fd（须已 O_NONBLOCK），并设置 TCP_NODELAY。
 // TcpStream(fd) 是全部连接（accept 产出的服务端连接 + connect 产出的上游连接）
 // 的唯一入口。此处设置 TCP_NODELAY：HTTP 响应常为"头 + body"多个小段写入，
 // 若不关闭 Nagle 算法，keep-alive 下第二个及之后的响应会撞上对端 delayed ACK
@@ -31,18 +32,24 @@ TcpStream::TcpStream(int fd) : fd_(fd) {
     }
 }
 
+// 析构：关闭 fd
 TcpStream::~TcpStream() { close(); }
 
+// 移动构造：接管 o 的 fd，o 置空（fd_=-1）
 TcpStream::TcpStream(TcpStream&& o) noexcept : fd_(o.fd_) { o.fd_ = -1; }
+// 移动赋值：先关闭自身旧 fd，再接管 o 的 fd
 TcpStream& TcpStream::operator=(TcpStream&& o) noexcept {
     if (this != &o) { close(); fd_ = o.fd_; o.fd_ = -1; }
     return *this;
 }
 
+// 关闭 fd（幂等）
 void TcpStream::close() {
     if (fd_ >= 0) { ::close(fd_); fd_ = -1; }
 }
 
+// 非阻塞读取尽可能多的数据（单次 read，返回 0 字节表示 EOF）
+// 参数：buf - 接收缓冲区；n - 缓冲容量；timeout_ms - 等待超时（毫秒，<0 无限）
 coro::Task<IoResult> TcpStream::read_some(void* buf, size_t n, int64_t timeout_ms) {
     if (fd_ < 0) co_return IoResult{0, IoError::Closed};
     for (;;) {
@@ -59,6 +66,8 @@ coro::Task<IoResult> TcpStream::read_some(void* buf, size_t n, int64_t timeout_m
     }
 }
 
+// 精确读取 n 字节（内部循环调用 read_some 补齐）
+// 参数：buf - 接收缓冲区；n - 需读取字节数；timeout_ms - 等待超时（毫秒，<0 无限）
 coro::Task<IoResult> TcpStream::read_exact(void* buf, size_t n, int64_t timeout_ms) {
     size_t total = 0;
     while (total < n) {
@@ -69,6 +78,8 @@ coro::Task<IoResult> TcpStream::read_exact(void* buf, size_t n, int64_t timeout_
     co_return IoResult{total, IoError::None};
 }
 
+// 全量写出 data（内部循环处理部分写/写满时等待可写）
+// 参数：data - 待写数据；timeout_ms - 写超时（毫秒，<0 无限）。全部写完返回 true
 coro::Task<bool> TcpStream::write_all(std::string_view data, int64_t timeout_ms) {
     if (fd_ < 0) co_return false;
     size_t sent = 0;
@@ -86,6 +97,8 @@ coro::Task<bool> TcpStream::write_all(std::string_view data, int64_t timeout_ms)
     co_return true;
 }
 
+// 单次 writev 写出多个不连续段（头 + 零拷贝 body 合并为一次系统调用）
+// 参数：parts - 待写段列表（各 string_view 在协程期间须保持有效）；timeout_ms - 写超时（毫秒，<0 无限）。全部写完返回 true
 // writev_all：单次系统调用写出多个不连续段（h1 响应头 + 零拷贝 body）。
 // 不拷贝用户态数据——iovec 直接指向各段（region / FileCache），
 // 把 Send() 的"头一次 write_all + body 一次 write_all"（2 次 syscall）

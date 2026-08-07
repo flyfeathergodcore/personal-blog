@@ -24,6 +24,7 @@ class StreamSink;
 
 class RequestHandler {
 public:
+    // 虚析构，确保派生类正确释放
     virtual ~RequestHandler() = default;
 
     /// Fast sync path — override for CPU-bound handlers.
@@ -74,11 +75,17 @@ public:
 
 class StaticFileHandler : public RequestHandler {
 public:
+    // 构造静态文件处理器
+    // 参数：cache - 文件缓存指针（不拥有，需存活于 handler 生命周期内）
     explicit StaticFileHandler(const FileCache* cache);
+    // 同步处理静态文件请求，从 FileCache 取文件内容并构造响应
+    // 参数：ctx - 请求上下文
     Response Handle(const Context& ctx) override;
 
 private:
     const FileCache* cache_;
+    // 规范化请求路径，去除 /../ 等危险片段，防止路径穿越
+    // 参数：raw - 原始请求路径；返回规范化后的路径
     std::string NormalizePath(std::string_view raw) const;
 };
 
@@ -88,6 +95,8 @@ private:
 
 class NullHandler : public RequestHandler {
 public:
+    // 兜底处理任何请求，一律返回 404
+    // 参数：ctx - 请求上下文
     Response Handle(const Context& ctx) override {
         return Response::Error(404, *ctx.Pool());
     }
@@ -99,8 +108,12 @@ public:
 
 class RedirectHandler : public RequestHandler {
 public:
+    // 构造重定向处理器
+    // 参数：target - 重定向目标 URL；code - 状态码（默认 302）
     explicit RedirectHandler(std::string target, int code = 302)
         : target_(std::move(target)), code_(code) {}
+    // 返回带 Location 头的重定向响应
+    // 参数：ctx - 请求上下文
     Response Handle(const Context& ctx) override;
 private:
     std::string target_;
@@ -116,8 +129,12 @@ private:
 
 class FunctionHandler : public RequestHandler {
 public:
+    // 构造函数式处理器
+    // 参数：fn - 签名为 Response(const Context&) 的可调用对象
     explicit FunctionHandler(std::function<Response(const Context&)> fn)
         : fn_(std::move(fn)) {}
+    // 同步调用被包装的函数并返回其结果
+    // 参数：ctx - 请求上下文
     Response Handle(const Context& ctx) override { return fn_(ctx); }
 private:
     std::function<Response(const Context&)> fn_;
@@ -132,6 +149,7 @@ private:
 
 class StreamSink {
 public:
+    // 虚析构，确保派生类正确释放
     virtual ~StreamSink() = default;
 
     /// 写原始 bytes 到响应流

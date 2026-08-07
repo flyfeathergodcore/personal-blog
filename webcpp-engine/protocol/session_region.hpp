@@ -28,9 +28,12 @@ struct RegionOff {
 //
 class SessionRegion {
 public:
+    // 默认构造：不绑定任何区域池
     SessionRegion() = default;
+    // 析构：归还已从池中获取的区域
     ~SessionRegion();
 
+    // 禁止拷贝/移动（区域内存所有权独占）
     SessionRegion(const SessionRegion&) = delete;
     SessionRegion& operator=(const SessionRegion&) = delete;
     SessionRegion(SessionRegion&&) = delete;
@@ -58,6 +61,8 @@ public:
         return {Data() + r.off, r.len};
     }
 
+    // 返回区域内存基址（未绑定池时为 nullptr）
+    // 参数：无
     char* Data() const {
         return pool_ ? pool_->Base() + offset_ : nullptr;
     }
@@ -74,6 +79,8 @@ public:
     /// Write an unsigned integer as decimal (zero alloc).
     void WriteUint(uint64_t n);
 
+    // 判断是否已绑定池且持有有效区域
+    // 参数：无
     bool IsActive() const { return pool_ != nullptr && offset_ != 0; }
 
     /// Enable structured header mode (H2).  When set, Response::Header()

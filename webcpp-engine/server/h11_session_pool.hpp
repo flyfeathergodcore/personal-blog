@@ -15,14 +15,17 @@ class H11SessionPool {
 public:
     using H11SessionTls = H11Session<net::TlsStream>;
 
+    // 构造函数：创建空对象池
     H11SessionPool() = default;
 
     /// 取一个空闲 Session（空壳，需 Reset），池空返回 nullptr
     std::shared_ptr<H11SessionTls> TryAcquireSession();
 
-    /// 归还 Session
+    /// 归还使用完的 Session 至空闲池，供下次连接复用
     void ReleaseSession(std::shared_ptr<H11SessionTls>);
 
+    // 空闲 Session 数量（用于指标/调试）
+    // 参数：无；返回：空闲数量
     size_t IdleCount() const;
 
 private:

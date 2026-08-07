@@ -43,7 +43,9 @@ class FileCache;
 
 class Router {
 public:
+    // 构造 Router：创建根节点
     Router();
+    // 析构：释放所有 handler 与节点
     ~Router();
 
     // ── Route registration ──
@@ -53,10 +55,20 @@ public:
     void Add(std::string path, std::unique_ptr<RequestHandler> handler);
 
     /// Method-specific routes.
+    // 注册 GET 路由
+    // 参数：path - 路由路径；h - 处理器（独占所有权）
     void Get   (std::string path, std::unique_ptr<RequestHandler> h) { AddRoute("GET",    std::move(path), std::move(h)); }
+    // 注册 POST 路由
+    // 参数：path - 路由路径；h - 处理器（独占所有权）
     void Post  (std::string path, std::unique_ptr<RequestHandler> h) { AddRoute("POST",   std::move(path), std::move(h)); }
+    // 注册 PUT 路由
+    // 参数：path - 路由路径；h - 处理器（独占所有权）
     void Put   (std::string path, std::unique_ptr<RequestHandler> h) { AddRoute("PUT",    std::move(path), std::move(h)); }
+    // 注册 DELETE 路由
+    // 参数：path - 路由路径；h - 处理器（独占所有权）
     void Delete(std::string path, std::unique_ptr<RequestHandler> h) { AddRoute("DELETE", std::move(path), std::move(h)); }
+    // 注册 HEAD 路由
+    // 参数：path - 路由路径；h - 处理器（独占所有权）
     void Head  (std::string path, std::unique_ptr<RequestHandler> h) { AddRoute("HEAD",   std::move(path), std::move(h)); }
 
     // ── Lambda / 函数式注册 ──
@@ -65,6 +77,8 @@ public:
     // unique_ptr<RequestHandler> 重载（unique_ptr 不可调用 → 模板被排除）。
     template<typename Fn,
         std::enable_if_t<std::is_invocable_r_v<Response, Fn, const Context&>, int> = 0>
+    // 函数式注册任意方法路由：自动包装为 FunctionHandler
+    // 参数：path - 路由路径；fn - 签名为 Response(const Context&) 的可调用对象
     void Add(std::string path, Fn fn) {
         Add(std::move(path),
             std::unique_ptr<RequestHandler>(
@@ -72,6 +86,8 @@ public:
     }
     template<typename Fn,
         std::enable_if_t<std::is_invocable_r_v<Response, Fn, const Context&>, int> = 0>
+    // 函数式注册 GET 路由
+    // 参数：path - 路由路径；fn - 签名为 Response(const Context&) 的可调用对象
     void Get(std::string path, Fn fn) {
         AddRoute("GET", std::move(path),
             std::unique_ptr<RequestHandler>(
@@ -79,6 +95,8 @@ public:
     }
     template<typename Fn,
         std::enable_if_t<std::is_invocable_r_v<Response, Fn, const Context&>, int> = 0>
+    // 函数式注册 POST 路由
+    // 参数：path - 路由路径；fn - 签名为 Response(const Context&) 的可调用对象
     void Post(std::string path, Fn fn) {
         AddRoute("POST", std::move(path),
             std::unique_ptr<RequestHandler>(
@@ -86,6 +104,8 @@ public:
     }
     template<typename Fn,
         std::enable_if_t<std::is_invocable_r_v<Response, Fn, const Context&>, int> = 0>
+    // 函数式注册 PUT 路由
+    // 参数：path - 路由路径；fn - 签名为 Response(const Context&) 的可调用对象
     void Put(std::string path, Fn fn) {
         AddRoute("PUT", std::move(path),
             std::unique_ptr<RequestHandler>(
@@ -93,6 +113,8 @@ public:
     }
     template<typename Fn,
         std::enable_if_t<std::is_invocable_r_v<Response, Fn, const Context&>, int> = 0>
+    // 函数式注册 DELETE 路由
+    // 参数：path - 路由路径；fn - 签名为 Response(const Context&) 的可调用对象
     void Delete(std::string path, Fn fn) {
         AddRoute("DELETE", std::move(path),
             std::unique_ptr<RequestHandler>(
@@ -100,6 +122,8 @@ public:
     }
     template<typename Fn,
         std::enable_if_t<std::is_invocable_r_v<Response, Fn, const Context&>, int> = 0>
+    // 函数式注册 HEAD 路由
+    // 参数：path - 路由路径；fn - 签名为 Response(const Context&) 的可调用对象
     void Head(std::string path, Fn fn) {
         AddRoute("HEAD", std::move(path),
             std::unique_ptr<RequestHandler>(
@@ -167,15 +191,25 @@ private:
         std::unique_ptr<
             std::unordered_map<std::string, RequestHandler*>> extra;
 
+        // 设置指定 HTTP 方法的 handler
+        // 参数：method - HTTP 方法；h - 处理器指针
         void SetHandler(std::string_view method, RequestHandler* h);
+        // 获取指定 HTTP 方法的 handler，无则返回 nullptr
+        // 参数：method - HTTP 方法
         RequestHandler* GetHandler(std::string_view method) const;
+        // 判断本节点是否持有任意方法的 handler
         bool HasHandler() const;
 
         // 子节点管理
+        // 添加静态子节点并记录其首字节到 indices
         // @param childFirstByte 子节点 path 的首字节（用于 indices）
         // 由于 child->path 可能在后续才设置，调用者传入已知的首字节
         Node* AddStaticChild(std::unique_ptr<Node> child, char childFirstByte);
+        // 添加 :param 动态子节点并设置 paramChild 快指针
+        // 参数：child - 参数子节点
         Node* AddParamChild(std::unique_ptr<Node> child);
+        // 添加 *catchAll 兜底子节点并设置 catchAllChild 快指针
+        // 参数：child - 兜底子节点
         Node* AddCatchAllChild(std::unique_ptr<Node> child);
 
         // 优先级：子树中的 leaf handler 数量（用于子节点排序）
@@ -193,6 +227,8 @@ private:
     mutable std::shared_mutex rw_mutex_;
 
     // ── 内部路由注册 ──
+    // 注册指定 HTTP 方法的 handler（内部实现）
+    // 参数：method - HTTP 方法；path - 路由路径；handler - 处理器（独占所有权）
     void AddRoute(std::string method, std::string path,
                   std::unique_ptr<RequestHandler> handler);
 
@@ -215,7 +251,11 @@ private:
                        const Node* prefixFallback = nullptr) const;
 
     // ── 工具函数 ──
+    // 计算两个路径的最长公共前缀长度
+    // 参数：a - 路径 a；b - 路径 b
     static size_t LongestCommonPrefix(std::string_view a, std::string_view b);
+    // 查找路径中第一个 :param 或 *catchAll 通配符（须位于段首）
+    // 参数：path - 待查找路径
     static std::string_view FindWildcard(std::string_view path);
 
     /// 剥离 query string（'?' 之后），仅用于路由匹配。

@@ -19,6 +19,8 @@
 
 // ── Helpers ──
 
+// 从缓冲区当前位置读取一行（CRLF 结尾，不含换行符），成功返回 true 并推进 pos
+// 参数：buf - 缓冲区内容；pos - 读取起始位置（成功后被推进到下一行）；line - 输出行内容
 static bool ReadLine(const std::string& buf, size_t& pos, std::string& line)
 {
     auto cr = buf.find('\r', pos);
@@ -31,6 +33,7 @@ static bool ReadLine(const std::string& buf, size_t& pos, std::string& line)
 
 /// 读取并解析 chunked 编码的 body，还原为纯字节写入 out。
 /// 返回 false 表示上游格式错误 / 连接中断。
+/// 参数：reader - 上游响应读取器；out - 还原后的 body 字节
 static coro::Task<bool> ReadChunkedBody(net::BufferedReader& reader,
                                         std::string& out)
 {
@@ -86,6 +89,8 @@ struct FrameSource {
     size_t pos = 0;
     Stream& inner;
 
+    // 读取字节：先消费 101 握手后已缓冲的上游字节，耗尽后才回落到底层 socket
+    // 参数：buf - 输出缓冲区；n - 请求读取字节数；timeout_ms - 超时（-1 不超时）
     coro::Task<net::IoResult> read_some(void* buf, size_t n,
                                         int64_t timeout_ms = -1) {
         if (pos < pending.size()) {
@@ -97,6 +102,8 @@ struct FrameSource {
         co_return co_await inner.read_some(buf, n, timeout_ms);
     }
 
+    // 原样透传写入到底层流
+    // 参数：data - 待写入数据；timeout_ms - 超时（-1 不超时）
     coro::Task<bool> write_all(std::string_view data, int64_t timeout_ms = -1) {
         co_return co_await inner.write_all(data, timeout_ms);
     }
@@ -114,6 +121,9 @@ struct ResponseFraming {
     std::vector<std::pair<std::string, std::string>> headers;
 };
 
+// 解析上游响应头：提取 framing 信息（Content-Length/Transfer-Encoding/Connection），
+// 收集待透传的头（跳过 hop-by-hop 与由调用方控制的 framing 头）
+// 参数：hdr_block_in - 原始头块字符串；f - 解析结果输出
 static void ParseResponseHeaders(const std::string& hdr_block_in, ResponseFraming& f)
 {
     // read_until("\r\n\r\n") 消费了分隔符，末行头无尾随 \r\n；补齐后每行都能被 ReadLine 解析
@@ -166,6 +176,8 @@ static void ParseResponseHeaders(const std::string& hdr_block_in, ResponseFramin
 
 // ── 构造 ──
 
+// 构造：由上游地址列表自建连接池（owned_pool_），并绑定到内部池
+// 参数：upstreams - 上游服务器地址列表
 ReverseProxy::ReverseProxy(std::vector<UpstreamAddr> upstreams)
 {
     std::vector<UpstreamServer> servers;
@@ -176,9 +188,13 @@ ReverseProxy::ReverseProxy(std::vector<UpstreamAddr> upstreams)
     pool_ = owned_pool_.get();
 }
 
+// 构造：绑定外部传入的共享上游池（不持有所有权）
+// 参数：pool - 外部上游连接池引用
 ReverseProxy::ReverseProxy(UpstreamPool& pool)
     : pool_(&pool) {}
 
+// 同步路径不支持转发（需要异步 I/O），无池时返回 502，否则 502 兜底
+// 参数：ctx - HTTP 请求上下文
 Response ReverseProxy::Handle(const Context& ctx)
 {
     if (!ctx.Pool()) return Response::Raw(502, R"({"error":"Bad Gateway"})");
@@ -188,7 +204,8 @@ Response ReverseProxy::Handle(const Context& ctx)
 // ═══════════════════════════════════════════════════════════════════
 // HandleAsync — 选上游 → Forward → 上报健康状态
 // ═══════════════════════════════════════════════════════════════════
-
+// 处理异步转发：从池中选一个健康上游，转发请求并按状态码上报成功/失败
+// 参数：ctx - HTTP 请求上下文；返回最终响应
 coro::Task<Response> ReverseProxy::HandleAsync(const Context& ctx)
 {
     auto* pool = ctx.Pool();
@@ -216,7 +233,9 @@ coro::Task<Response> ReverseProxy::HandleAsync(const Context& ctx)
 // ═══════════════════════════════════════════════════════════════════
 // Forward — 建连（含池复用）→ 发送请求 → 读响应 → 池归还
 // ═══════════════════════════════════════════════════════════════════
-
+// 转发单个请求到指定上游：优先复用池化连接，发送后解析 framing 读响应，
+// 连接健康且可复用则归还连接池
+// 参数：ctx - HTTP 请求上下文；host - 上游主机；port - 上游端口；返回组装好的响应
 coro::Task<Response> ReverseProxy::Forward(
     const Context& ctx,
     std::string_view host,
@@ -425,7 +444,9 @@ coro::Task<Response> ReverseProxy::Forward(
 // ═══════════════════════════════════════════════════════════════════
 // HandleWebSocket — WebSocket 透传上游（双向帧中继）
 // ═══════════════════════════════════════════════════════════════════
-
+// 处理 WebSocket 升级请求：向选中的上游建连并透传 upgrade 头，
+// 之后双向中继帧（客户端→上游与上游→客户端两腿并发）
+// 参数：ctx - HTTP 请求上下文；client_conn - 客户端 WebSocket 连接
 coro::Task<void> ReverseProxy::HandleWebSocket(
     const Context& ctx, WsConnectionBase& client_conn)
 {

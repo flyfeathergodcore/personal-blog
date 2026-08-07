@@ -5,6 +5,8 @@
 
 namespace {
 
+// 解析日志级别字符串；成功返回 true 并写入 out
+// 参数：s - 日志级别字符串；out - 输出解析结果
 bool ParseLogLevel(const std::string& s, LogLevel& out)
 {
     if (s == "debug") { out = LogLevel::Debug; return true; }
@@ -16,6 +18,8 @@ bool ParseLogLevel(const std::string& s, LogLevel& out)
 
 } // namespace
 
+// 从 YAML 文件加载配置；strict 为 true 时解析/文件错误直接抛出
+// 参数：path - 配置文件路径；strict - 是否严格模式（-t / dry-run）；返回解析后的配置
 Config Config::Load(const std::string& path, bool strict)
 {
     Config cfg;

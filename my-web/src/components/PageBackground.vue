@@ -13,6 +13,10 @@ const props = defineProps({
   overlay: { type: Boolean, default: true }
 })
 
+/**
+ * 背景样式计算：根据传入值生成 CSS background（图片 URL / 渐变 / 默认主题背景），
+ * 图片叠加半透明遮罩保证前景可读
+ */
 const bgStyle = computed(() => {
   const value = props.background
   if (!value) return { background: 'var(--blog-bg)' }

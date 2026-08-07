@@ -33,6 +33,12 @@ const emit = defineEmits(['anchors'])
 const md = new MarkdownIt({
   html: true, // 透传内嵌 HTML（支持含 HTML 的 md）；XSS 由下方 DOMPurify 白名单清洗兜底
   linkify: true, // 自动识别裸 URL 并转为链接
+  /**
+   * 代码高亮处理：能识别语言则高亮，否则转义原样输出（防注入）
+   * @param code 代码块内容
+   * @param lang 声明的语言标识
+   * @returns 高亮后的 <pre><code> HTML 片段
+   */
   // 返回类型显式标注为 string，打破与 md 的循环类型推断
   highlight: (code: string, lang: string): string => {
     // 能识别语言则高亮，否则仅转义输出（防止注入）
@@ -50,7 +56,11 @@ const anchors = ref<AnchorItem[]>([])
 // 标题 id 计数表：同名标题追加后缀（-2、-3...），保证 id 唯一
 const headingIdCounts = new Map<string, number>()
 
-// slugify：标题文本 -> 锚点 id（保留中文，其余转小写/空格转连字符）
+/**
+ * slugify：标题文本转锚点 id（保留中文，其余转小写、空格转连字符）
+ * @param text 标题原始文本
+ * @returns 生成的锚点 id；空文本兜底返回 'section'
+ */
 const slugify = (text: string): string =>
   text
     .trim()
@@ -58,7 +68,11 @@ const slugify = (text: string): string =>
     .replace(/[^\w一-龥]+/g, '-')
     .replace(/^-+|-+$/g, '') || 'section'
 
-// 生成唯一标题 id
+/**
+ * 生成唯一标题 id：同名标题追加 -2、-3 后缀，保证 id 不冲突
+ * @param text 标题文本
+ * @returns 唯一 id（可能带数字后缀）
+ */
 const uniqueId = (text: string): string => {
   const base = slugify(text)
   const count = headingIdCounts.get(base) ?? 0
@@ -66,9 +80,10 @@ const uniqueId = (text: string): string => {
   return count === 0 ? base : `${base}-${count + 1}`
 }
 
-// 渲染管线：md.parse 解析 token 流（收集锚点 + 为标题注入 id）
-//   -> md.renderer.render 输出 HTML -> DOMPurify 白名单清洗（防 XSS）-> v-html 输出
-// DOMPurify 默认只保留安全标签/属性，自动移除 script、iframe、事件属性、javascript: 协议等
+/**
+ * 渲染管线：md.parse 解析 token 流（收集锚点 + 为标题注入 id），
+ * 再经 md.renderer.render 输出 HTML，最后由 DOMPurify 白名单清洗（防 XSS）后写入 v-html
+ */
 const renderMd = () => {
   const tokens = md.parse(props.content, {})
   const list: AnchorItem[] = []
@@ -94,7 +109,9 @@ const renderMd = () => {
   renderedHtml.value = DOMPurify.sanitize(md.renderer.render(tokens, md.options, {}))
 }
 
-// content 变化时重新渲染；immediate 让挂载时立即渲染
+/**
+ * 监听 content 变化时重新渲染；immediate 让组件挂载时立即渲染
+ */
 watch(() => props.content, renderMd, { immediate: true })
 </script>
 

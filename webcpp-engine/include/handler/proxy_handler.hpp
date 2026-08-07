@@ -19,10 +19,17 @@ struct UpstreamConfig {
 
 class ProxyHandler : public RequestHandler {
 public:
+    // 构造单上游代理
+    // 参数：upstream - 上游地址配置（主机 + 端口）
     explicit ProxyHandler(UpstreamConfig upstream);
 
+    // 同步路径（仅为兜底，实际走异步）
+    // 参数：ctx - 请求上下文
     Response Handle(const Context& ctx) override;
+    // 异步转发请求到单个上游并返回响应
+    // 参数：ctx - 请求上下文
     coro::Task<Response> HandleAsync(const Context& ctx) override;
+    // 代理为 I/O 密集，走异步路径，始终返回 true
     bool IsAsync() const override { return true; }
 
 private:

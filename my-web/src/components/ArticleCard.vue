@@ -30,7 +30,9 @@ const props = defineProps({
 
 const router = useRouter()
 
-// 点击整卡跳转详情页
+/**
+ * 点击卡片跳转到文章详情页
+ */
 const goDetail = () => {
   router.push(`/article/${props.article.id}`)
 }

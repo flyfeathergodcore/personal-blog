@@ -69,7 +69,10 @@ export const DEFAULT_SIDEBAR_MENUS: MenuNode[] = [
   }
 ]
 
-// 读取原始菜单（字符串 icon 版，MenuManager 编辑用）；无数据返回默认深拷贝
+/**
+ * 读取原始菜单（字符串 icon 版，MenuManager 编辑用）；无数据返回默认深拷贝
+ * @returns 菜单节点数组
+ */
 export const loadMenusRaw = (): MenuNode[] => {
   try {
     const saved = JSON.parse(localStorage.getItem(SIDEBAR_MENU_KEY) || '') as MenuNode[]
@@ -80,7 +83,10 @@ export const loadMenusRaw = (): MenuNode[] => {
   return JSON.parse(JSON.stringify(DEFAULT_SIDEBAR_MENUS)) as MenuNode[]
 }
 
-// 保存菜单（MenuManager 调用）
+/**
+ * 保存菜单到 localStorage（MenuManager 调用）
+ * @param menus 要保存的菜单节点数组
+ */
 export const saveMenus = (menus: MenuNode[]): void => {
   localStorage.setItem(SIDEBAR_MENU_KEY, JSON.stringify(menus))
 }
@@ -93,6 +99,11 @@ export interface SidebarItemForRender {
   children: { label: string; index: string; icon?: Component }[]
 }
 
+/**
+ * 把菜单里的字符串 icon 映射为组件，生成 Sidebar 渲染所需的菜单结构
+ * @param menus 原始菜单节点（icon 为字符串）
+ * @returns 可供 Sidebar 渲染的菜单数组
+ */
 export const toSidebarItems = (menus: MenuNode[]): SidebarItemForRender[] =>
   menus.map((m) => ({
     label: m.label,

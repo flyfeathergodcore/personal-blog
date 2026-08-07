@@ -5,6 +5,8 @@
 #include <csignal>
 #include <unistd.h>
 
+// 构造函数：保存配置、路由、中间件、TLS 上下文与指标收集器
+// 参数：cfg - 服务配置；router - 路由表；middleware - 中间件管理器；tls - TLS 上下文；metrics - 指标收集器
 MultiServer::MultiServer(const Config& cfg,
                          Router& router,
                          MiddlewareManager& middleware,
@@ -13,6 +15,9 @@ MultiServer::MultiServer(const Config& cfg,
     : ServerBase(cfg, router, middleware, std::move(tls))
     , metrics_(std::move(metrics)) {}
 
+// 启动多 worker 服务：校验配置、接管信号、创建 worker 线程（SO_REUSEPORT 监听）、
+// 挂载监听/刷指标/信号等待协程，最后 join 等待优雅关闭
+// 参数：无
 void MultiServer::Start()
 {
     // ── 防御：worker 线程数非法（<1）时拒绝启动 ──
@@ -79,6 +84,7 @@ void MultiServer::Start()
 // 协程（while true 长期挂起）恢复时 this/捕获悬垂——GCC 因实现细节恰好
 // 不崩，clang 严格按标准会 use-after-scope 崩溃。成员协程 this 指向
 // MultiServer（Start 存活到 join），sig 按引用进帧（Start 局部变量，同存活）。
+// 参数：sig - 信号监视器（引用，与 Start 局部变量同存活）
 coro::Task<void> MultiServer::WatchSignals(net::SignalWatcher& sig)
 {
     while (true) {
@@ -98,6 +104,8 @@ coro::Task<void> MultiServer::WatchSignals(net::SignalWatcher& sig)
     co_return;
 }
 
+// 监听协程：循环 accept 新连接并 post 到对应 worker 事件循环处理，直到 shutdown
+// 参数：w - 所属 worker；wid - worker 序号
 coro::Task<void> MultiServer::Listen(Worker& w, int wid)
 {
     while (!shutdown_) {
@@ -120,6 +128,8 @@ coro::Task<void> MultiServer::Listen(Worker& w, int wid)
     co_return;
 }
 
+// 处理 TLS 连接：握手后按 ALPN 选择 H2 会话或 H1 会话（H1 复用池外壳）并驱动 Start()
+// 参数：w - 所属 worker；wid - worker 序号；tcp - 已 accept 的 TCP 流
 coro::Task<void> MultiServer::HandleTls(Worker& w, int wid, net::TcpStream tcp)
 {
     net::TlsStream ss(std::move(tcp), tls_->NativeContext());
@@ -167,6 +177,8 @@ coro::Task<void> MultiServer::HandleTls(Worker& w, int wid, net::TcpStream tcp)
     co_return;
 }
 
+// 处理明文 HTTP/1.1 连接：直接新建 H1 会话并驱动 Start()
+// 参数：w - 所属 worker；wid - worker 序号；tcp - 已 accept 的 TCP 流
 coro::Task<void> MultiServer::HandlePlain(Worker& w, int wid, net::TcpStream tcp)
 {
     // 非 TLS 路径（cfg_.tls_port == 0）：池只服务 TLS 类型，此路径直接新建 session，不复用外壳
@@ -185,6 +197,8 @@ coro::Task<void> MultiServer::HandlePlain(Worker& w, int wid, net::TcpStream tcp
     co_return;
 }
 
+// 周期任务协程：每秒刷一次指标，worker 0 每 60s 执行一次落库回调
+// 参数：worker_id - worker 序号
 coro::Task<void> MultiServer::FlushLoop(int worker_id)
 {
     int tick = 0;
@@ -200,6 +214,8 @@ coro::Task<void> MultiServer::FlushLoop(int worker_id)
     co_return;
 }
 
+// 优雅关闭排水协程：每秒检查活跃会话，清零则 stop loop，超时强制 stop
+// 参数：w - 待排水的 worker
 coro::Task<void> MultiServer::DrainLoop(Worker& w)
 {
     // 每 1s 检查活跃会话，清零则 stop；超过 kDrainTimeoutSec 强制 stop

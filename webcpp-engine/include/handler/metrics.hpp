@@ -77,6 +77,8 @@ struct RingSlot {
 struct LatencyPercentiles {
     uint64_t p50 = 0, p90 = 0, p99 = 0;
 };
+// 根据直方图桶计数计算 p50/p90/p99 延迟分位数
+// 参数：buckets - 各桶计数的延迟直方图数组
 LatencyPercentiles ComputePercentiles(const uint64_t buckets[kLatencyBuckets]);
 
 // 60s 聚合窗口（落库 site_stats 用）
@@ -122,28 +124,45 @@ struct AlertState {
 
 class MetricsCollector {
 public:
+    // 构造指标收集器
+    // 参数：num_workers - 初始 worker 线程数
     explicit MetricsCollector(int num_workers);
 
+    // 更新 worker 线程数
+    // 参数：n - worker 线程数
     void SetWorkerCount(int n) { num_workers_ = n; }
+    // 返回当前 worker 线程数
     int  WorkerCount() const { return num_workers_; }
 
     // Alerts
+    // 设置告警规则
+    // 参数：rules - 告警规则列表
     void SetAlertRules(std::vector<AlertRule> rules) { alert_rules_ = std::move(rules); }
+    // 返回当前告警状态列表（只读）
     const std::vector<AlertState>& AlertStates() const { return alert_states_; }
 
     // ── Hot path (from Session) ──
 
+    // 记录一次请求（每 worker 热路径）
+    // 参数：latency_us - 请求耗时（微秒）；status_code - 状态码；bytes - 响应字节数；wid - worker ID；is_h2 - 是否 HTTP/2
     void OnRequest(uint64_t latency_us, int status_code,
                    size_t bytes, int wid, bool is_h2);
+    // 记录连接建立
+    // 参数：wid - worker ID
     void OnConnectionOpen(int wid);
+    // 记录连接关闭
+    // 参数：wid - worker ID
     void OnConnectionClose(int wid);
 
     // ── Per-worker flush (1-second timer) ──
 
+    // 将指定 worker 的计数器快照写入环形缓冲区
+    // 参数：wid - worker ID
     void Flush(int wid);
 
     // ── HTTP response builders ──
 
+    // 渲染全量指标 JSON（/metrics.json 用）
     std::string RenderMetricsJson() const;
 
     /// SSE: render the latest ring entry as a compact JSON line.
@@ -156,7 +175,9 @@ public:
 
     // ── Accessors ──
 
+    // 返回当前活动连接数（全 worker 求和）
     uint64_t ActiveConnections() const;
+    // 返回当前时间戳（unix 秒）
     int64_t  CurrentTimestamp() const;
 
     /// Timestamp of the most recently flushed ring slot.
@@ -175,5 +196,7 @@ private:
     std::vector<AlertRule>  alert_rules_;
     std::vector<AlertState> alert_states_;
 
+    // 根据当前时间戳评估各告警规则，更新告警状态
+    // 参数：now_ts - 当前时间戳（unix 秒）
     void EvaluateAlerts(int64_t now_ts);
 };

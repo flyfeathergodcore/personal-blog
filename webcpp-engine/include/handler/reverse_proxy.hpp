@@ -28,8 +28,13 @@ public:
     /// 从预建池构造（高级用法）。
     explicit ReverseProxy(UpstreamPool& pool);
 
+    // 同步路径（反向代理为 I/O 密集，仅做兜底）
+    // 参数：ctx - 请求上下文
     Response Handle(const Context& ctx) override;
+    // 异步转发请求到后端并返回响应
+    // 参数：ctx - 请求上下文
     coro::Task<Response> HandleAsync(const Context& ctx) override;
+    // 反向代理走异步路径，始终返回 true
     bool IsAsync() const override { return true; }
 
     /// 反向代理直接处理 WS upgrade：会话把 WS 升级请求直接路由到
@@ -41,6 +46,8 @@ public:
                                      WsConnectionBase& client_conn) override;
 
 private:
+    // 向指定上游发送请求并读回响应
+    // 参数：ctx - 请求上下文；host - 上游主机；port - 上游端口
     coro::Task<Response> Forward(const Context& ctx,
                                  std::string_view host,
                                  unsigned short port);

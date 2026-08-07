@@ -1,8 +1,9 @@
-// TcpListener 实现：getaddrinfo 解析主机名/端口 → socket(SOCK_NONBLOCK|CLOEXEC)
+// TcpListener 实现：getaddrinfo 解析主机名/端口 → socket(NONBLOCK|CLOEXEC)
 // → setsockopt(SO_REUSEADDR[/SO_REUSEPORT]) → bind → listen(1024)。
-// accept 走 accept4(SOCK_NONBLOCK|CLOEXEC)：返回的连接 fd 天然满足
-// TcpStream 的"fd 已 O_NONBLOCK"前置条件，免去额外 fcntl。
+// socket 创建与 accept 走跨平台 helper（net/socket_util.h）：返回的连接 fd
+// 天然满足 TcpStream 的"fd 已 O_NONBLOCK"前置条件。
 #include "net/tcp_listener.h"
+#include "net/socket_util.h"
 
 #include <cerrno>
 #include <cstring>
@@ -15,8 +16,11 @@
 
 namespace net {
 
+// 析构：关闭监听 fd
 TcpListener::~TcpListener() { close(); }
 
+// 创建并绑定监听 socket：getaddrinfo → socket(NONBLOCK|CLOEXEC) → bind → listen(1024)
+// 参数：host - 绑定地址（空/nullptr 绑定通配地址）；port - 端口（0 由内核分配）；reuse_port - 是否设置 SO_REUSEPORT
 bool TcpListener::open(const char* host, uint16_t port, bool reuse_port) {
     close();
 
@@ -31,9 +35,8 @@ bool TcpListener::open(const char* host, uint16_t port, bool reuse_port) {
         return false;
 
     for (addrinfo* ai = res; ai; ai = ai->ai_next) {
-        int fd = ::socket(ai->ai_family,
-                          ai->ai_socktype | SOCK_NONBLOCK | SOCK_CLOEXEC,
-                          ai->ai_protocol);
+        int fd = SocketNonBlockCloexec(ai->ai_family, ai->ai_socktype,
+                                       ai->ai_protocol);
         if (fd < 0) continue;
         int one = 1;
         // 总开 SO_REUSEADDR，避免 TIME_WAIT 残留导致重启监听失败
@@ -54,11 +57,13 @@ bool TcpListener::open(const char* host, uint16_t port, bool reuse_port) {
     return false;
 }
 
+// 协程接受一条连接：accept4 产出已 O_NONBLOCK 的连接 fd 移交给 out
+// 参数：out - 接收连接（覆盖旧值）；timeout_ms - 等待超时（毫秒，<0 无限）
 coro::Task<IoResult> TcpListener::accept(TcpStream& out, int64_t timeout_ms) {
     if (fd_ < 0) co_return IoResult{0, IoError::Closed};
     for (;;) {
-        // accept4 直接产出 O_NONBLOCK|FD_CLOEXEC 的连接 fd
-        int cfd = ::accept4(fd_, nullptr, nullptr, SOCK_NONBLOCK | SOCK_CLOEXEC);
+        // 产出 O_NONBLOCK|FD_CLOEXEC 的连接 fd（Linux 用 accept4，macOS 用 fcntl）
+        int cfd = AcceptNonBlockCloexec(fd_);
         if (cfd >= 0) {
             out = TcpStream(cfd);        // 移动接管连接 fd
             co_return IoResult{0, IoError::None};
@@ -74,6 +79,7 @@ coro::Task<IoResult> TcpListener::accept(TcpStream& out, int64_t timeout_ms) {
     }
 }
 
+// 关闭监听 fd（幂等）
 void TcpListener::close() {
     if (fd_ >= 0) { ::close(fd_); fd_ = -1; }
 }

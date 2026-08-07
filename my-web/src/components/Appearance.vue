@@ -190,19 +190,28 @@ const serverImages = ref<Resource[]>([])
 // 预留：后端上传接口地址（TODO: 部署后替换为真实接口）
 const uploadUrl = '/api/upload'
 
-// 从服务器资源库拉取图片资源（真实接口 GET /api/resources，仅保留图片类型）
+/**
+ * 从服务器资源库拉取图片资源（真实接口 GET /api/resources，仅保留图片类型）
+ * @returns 图片资源列表
+ */
 const fetchServerImages = async (): Promise<Resource[]> => {
   const all = await getResources()
   return all.filter((r) => r.type === 'image')
 }
 
-// 打开上传弹窗，记录当前操作的图片目标
+/**
+ * 打开上传弹窗并记录当前操作的图片目标
+ * @param target 目标类型：login = 登录页背景，card = 登录框背景
+ */
 const openUpload = (target: ImageTarget) => {
   imageTarget.value = target
   uploadVisible.value = true
 }
 
-// 打开资源选择弹窗并加载资源库图片列表（失败给出提示，不清空已有展示）
+/**
+ * 打开资源选择弹窗并加载资源库图片列表（失败给出提示，不清空已有展示）
+ * @param target 目标类型：login = 登录页背景，card = 登录框背景
+ */
 const openPicker = async (target: ImageTarget) => {
   imageTarget.value = target
   pickerVisible.value = true
@@ -214,7 +223,10 @@ const openPicker = async (target: ImageTarget) => {
   }
 }
 
-// 把 url 写入当前目标行（login=登录页背景 / card=登录框背景）
+/**
+ * 把 url 写入当前操作目标的背景值
+ * @param url 图片地址
+ */
 const setTargetValue = (url: string) => {
   if (imageTarget.value === 'login') {
     loginBgImage.value = url
@@ -223,18 +235,26 @@ const setTargetValue = (url: string) => {
   }
 }
 
-// 从资源库选中：存文件接口短路径（/api/img/:id），前台按需加载。
-// 不走完整 data URL——大图 data URL 传输慢，且塞进 localStorage 会超限（与主页背景一致）。
+/**
+ * 从资源库选中图片：存文件接口短路径（/api/img/:id）按需加载；
+ * 不走完整 data URL——大图传输慢且塞进 localStorage 会超限（与主页背景一致）
+ * @param img 选中的图片资源
+ */
 const applyImage = (img: Resource) => {
   setTargetValue('/api/img/' + img.id)
 }
 
-// 当前操作目标的背景值（选图弹窗用于高亮已选中的图片）
+/**
+ * 当前操作目标的背景值（选图弹窗用于高亮已选中的图片）
+ */
 const currentValue = computed(() =>
   imageTarget.value === 'login' ? loginBgImage.value : loginCardBgImage.value
 )
 
-// 预留：自定义上传（TODO: 后期接后端上传接口，如 POST /api/upload）
+/**
+ * 预留的自定义上传（TODO: 后期接后端上传接口）：当前用本地预览 URL 打通流程
+ * @param options el-upload 的请求配置（含文件与回调）
+ */
 const handleCustomUpload = (options: UploadRequestOptions) => {
   const formData = new FormData()
   formData.append('file', options.file)
@@ -250,8 +270,9 @@ const handleCustomUpload = (options: UploadRequestOptions) => {
   options.onSuccess({})
 }
 
-// 根据背景色亮度计算文字颜色（ITU-R BT.601 感知亮度公式）
-// 深色背景用白色文字，浅色背景用深色文字
+/**
+ * 根据背景色亮度计算文字颜色（ITU-R BT.601 感知亮度公式）：深色背景用白字，浅色背景用深色字
+ */
 const textColor = computed(() => {
   const hex = bgColor.value.replace('#', '')
   const r = parseInt(hex.slice(0, 2), 16)
@@ -261,8 +282,10 @@ const textColor = computed(() => {
   return luminance > 150 ? '#333333' : '#ffffff'
 })
 
-// 点击「保存设置」：把当前全部外观配置交给父组件持久化。
-// 显式保存取代原来的 watch 自动保存，让用户对「已保存」有明确感知
+/**
+ * 点击「保存设置」：把当前全部外观配置交给父组件持久化；
+ * 显式保存取代原来的 watch 自动保存，让用户对「已保存」有明确感知
+ */
 const handleSave = () => {
   emit('save', {
     backgroundColor: bgColor.value,

@@ -72,8 +72,8 @@ struct H2FrameHeader {
     uint32_t    stream_id;  // 31-bit big-endian
 };
 
-/// Decode a 9-byte frame header from wire format.
-/// @pre  `data` points to at least 9 readable bytes.
+/// 解码 9 字节的帧头（wire 格式，24 位长度 + 类型 + 标志 + 31 位流 ID）。
+/// 前置条件：`data` 至少指向 9 个可读字节。
 inline H2FrameHeader DecodeFrameHeader(const uint8_t* data) {
     return {
         .length    = (static_cast<uint32_t>(data[0]) << 16)
@@ -88,8 +88,8 @@ inline H2FrameHeader DecodeFrameHeader(const uint8_t* data) {
     };
 }
 
-/// Encode a frame header to wire format.
-/// @param[out] dst  Must point to 9 writable bytes.
+/// 将帧头编码为 wire 格式。
+/// 参数：dst - 输出缓冲，须指向至少 9 个可写字节；hdr - 待编码的帧头
 inline void EncodeFrameHeader(uint8_t* dst, const H2FrameHeader& hdr) {
     dst[0] = static_cast<uint8_t>(hdr.length >> 16);
     dst[1] = static_cast<uint8_t>(hdr.length >>  8);
@@ -112,7 +112,8 @@ struct H2PriorityPayload {
     uint8_t  weight;             // 1–256 (wire = value - 1)
 };
 
-/// @pre  `data` points to 5 payload bytes.
+/// 解码 5 字节的 PRIORITY 负载（排他位 + 31 位依赖流 ID + 权重）。
+/// 参数：data - 指向 5 个负载字节
 inline H2PriorityPayload DecodePriority(const uint8_t* data) {
     return {
         .exclusive         = (data[0] & 0x80) != 0,
@@ -124,6 +125,8 @@ inline H2PriorityPayload DecodePriority(const uint8_t* data) {
     };
 }
 
+// 将优先级负载编码为 5 字节 wire 格式。
+// 参数：dst - 输出缓冲（至少 5 字节）；p - 优先级信息
 inline void EncodePriority(uint8_t* dst, const H2PriorityPayload& p) {
     uint32_t sd = p.stream_dependency & 0x7fffffff;
     if (p.exclusive) sd |= 0x80000000u;
@@ -142,6 +145,8 @@ struct H2RstStream {
     H2Error error_code;
 };
 
+// 解码 4 字节的 RST_STREAM 负载（错误码）。
+// 参数：data - 指向负载数据
 inline H2RstStream DecodeRstStream(const uint8_t* data) {
     uint32_t ec = (static_cast<uint32_t>(data[0]) << 24)
                 | (static_cast<uint32_t>(data[1]) << 16)
@@ -150,6 +155,8 @@ inline H2RstStream DecodeRstStream(const uint8_t* data) {
     return {static_cast<H2Error>(ec)};
 }
 
+// 将 RST_STREAM 错误码编码为 4 字节 wire 格式。
+// 参数：dst - 输出缓冲（至少 4 字节）；ec - 错误码
 inline void EncodeRstStream(uint8_t* dst, H2Error ec) {
     uint32_t v = static_cast<uint32_t>(ec);
     dst[0] = static_cast<uint8_t>(v >> 24);
@@ -172,6 +179,8 @@ struct H2Settings {
     std::optional<uint32_t> enable_connect_protocol;  // 0x08, RFC 8441
 };
 
+// 解码 SETTINGS 帧负载（每条 6 字节：2 字节 id + 4 字节值），仅保留已知参数项。
+// 参数：data - 负载数据；len - 负载长度（字节）
 inline H2Settings DecodeSettings(const uint8_t* data, size_t len) {
     H2Settings s;
     for (size_t i = 0; i + 6 <= len; i += 6) {
@@ -193,7 +202,8 @@ inline H2Settings DecodeSettings(const uint8_t* data, size_t len) {
     return s;
 }
 
-/// Returns 6 × number of set entries.
+/// 将 SETTINGS 各项编码为 wire 格式，返回写入总字节数（6 × 设置的条目数）。
+/// 参数：dst - 输出缓冲；s - 待编码的 SETTINGS 集合
 inline size_t EncodeSettings(uint8_t* dst, const H2Settings& s) {
     size_t n = 0;
     auto emit = [&](uint16_t id, uint32_t v) {
@@ -223,6 +233,8 @@ struct H2PushPromise {
     uint32_t promised_stream_id;  // 31-bit
 };
 
+// 解码 PUSH_PROMISE 前 4 字节的承诺流 ID（31 位）。
+// 参数：data - 指向负载数据
 inline H2PushPromise DecodePushPromise(const uint8_t* data) {
     return {
         .promised_stream_id = (static_cast<uint32_t>(data[0] & 0x7f) << 24)
@@ -232,6 +244,8 @@ inline H2PushPromise DecodePushPromise(const uint8_t* data) {
     };
 }
 
+// 将承诺流 ID 编码为 PUSH_PROMISE 的 4 字节 wire 格式。
+// 参数：dst - 输出缓冲；promised_id - 承诺流 ID
 inline void EncodePushPromise(uint8_t* dst, uint32_t promised_id) {
     dst[0] = static_cast<uint8_t>((promised_id >> 24) & 0x7f);
     dst[1] = static_cast<uint8_t>(promised_id >> 16);
@@ -247,12 +261,16 @@ struct H2Ping {
     uint8_t opaque_data[8];
 };
 
+// 解码 PING 帧的 8 字节不透明数据。
+// 参数：data - 指向负载数据
 inline H2Ping DecodePing(const uint8_t* data) {
     H2Ping p;
     std::memcpy(p.opaque_data, data, 8);
     return p;
 }
 
+// 将 PING 的 8 字节不透明数据编码到输出缓冲。
+// 参数：dst - 输出缓冲；p - PING 数据
 inline void EncodePing(uint8_t* dst, const H2Ping& p) {
     std::memcpy(dst, p.opaque_data, 8);
 }
@@ -266,6 +284,8 @@ struct H2GoAway {
     H2Error  error_code;
 };
 
+// 解码 GOAWAY 帧前 8 字节固定部分（最后流 ID + 错误码）。
+// 参数：data - 指向负载数据
 inline H2GoAway DecodeGoAway(const uint8_t* data) {
     return {
         .last_stream_id = (static_cast<uint32_t>(data[0] & 0x7f) << 24)
@@ -280,6 +300,8 @@ inline H2GoAway DecodeGoAway(const uint8_t* data) {
     };
 }
 
+// 将 GOAWAY 固定 8 字节（最后流 ID + 错误码）编码为 wire 格式。
+// 参数：dst - 输出缓冲；g - GOAWAY 信息
 inline void EncodeGoAway(uint8_t* dst, const H2GoAway& g) {
     dst[0] = static_cast<uint8_t>((g.last_stream_id >> 24) & 0x7f);
     dst[1] = static_cast<uint8_t>(g.last_stream_id >> 16);
@@ -300,6 +322,8 @@ struct H2WindowUpdate {
     uint32_t increment;  // 31-bit, valid range 1–2147483647
 };
 
+// 解码 WINDOW_UPDATE 帧的 4 字节 31 位增量。
+// 参数：data - 指向负载数据
 inline H2WindowUpdate DecodeWindowUpdate(const uint8_t* data) {
     return {
         .increment = (static_cast<uint32_t>(data[0] & 0x7f) << 24)
@@ -309,6 +333,8 @@ inline H2WindowUpdate DecodeWindowUpdate(const uint8_t* data) {
     };
 }
 
+// 将 WINDOW_UPDATE 增量编码为 4 字节 wire 格式。
+// 参数：dst - 输出缓冲；increment - 窗口增量
 inline void EncodeWindowUpdate(uint8_t* dst, uint32_t increment) {
     dst[0] = static_cast<uint8_t>((increment >> 24) & 0x7f);
     dst[1] = static_cast<uint8_t>(increment >> 16);
@@ -320,7 +346,8 @@ inline void EncodeWindowUpdate(uint8_t* dst, uint32_t increment) {
 // HEADERS / DATA frame helpers (padding + priority)
 // ═══════════════════════════════════════════════════════════════
 
-/// Offset of the HPACK block within a HEADERS payload.
+// 计算 HEADERS 负载中 HPACK 块起始偏移（跳过填充长度字节与优先级字段）。
+// 参数：hdr - 帧头（含 flags）
 inline size_t HeadersBlockStart(const H2FrameHeader& hdr) {
     size_t start = 0;
     if (hdr.flags & H2Flags::PADDED)  start += 1;  // Pad Length byte
@@ -328,7 +355,8 @@ inline size_t HeadersBlockStart(const H2FrameHeader& hdr) {
     return start;
 }
 
-/// Length of the HPACK block within a HEADERS payload (excluding trailing padding).
+// 计算 HEADERS 负载中 HPACK 块长度（不含尾部填充）。
+// 参数：hdr - 帧头；payload - 帧负载数据（用于读取填充长度字节）
 inline size_t HeadersBlockLength(const H2FrameHeader& hdr, const uint8_t* payload) {
     size_t overhead = !!(hdr.flags & H2Flags::PADDED)
                     + 5 * !!(hdr.flags & H2Flags::PRIORITY);
@@ -340,12 +368,14 @@ inline size_t HeadersBlockLength(const H2FrameHeader& hdr, const uint8_t* payloa
     return hdr.length - overhead;
 }
 
-/// Offset of data within a DATA frame payload.
+// 计算 DATA 帧负载中实际数据的起始偏移（有填充则跳过 1 字节 Pad Length）。
+// 参数：hdr - 帧头
 inline size_t DataOffset(const H2FrameHeader& hdr) {
     return (hdr.flags & H2Flags::PADDED) ? 1 : 0;
 }
 
-/// Actual data length in a DATA frame (excluding optional padding).
+// 计算 DATA 帧中实际数据长度（不含可选填充）。
+// 参数：hdr - 帧头；payload - 帧负载数据（用于读取填充长度字节）
 inline size_t DataLength(const H2FrameHeader& hdr, const uint8_t* payload) {
     if (hdr.flags & H2Flags::PADDED) {
         uint8_t pad_len = payload[0];

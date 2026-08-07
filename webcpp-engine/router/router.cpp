@@ -10,6 +10,8 @@
 // Node helpers
 // ═══════════════════════════════════════════════════════════════════
 
+// 设置指定 HTTP 方法的 handler；非标准方法存入 extra 表
+// 参数：method - HTTP 方法；h - 处理器指针
 void Router::Node::SetHandler(std::string_view method, RequestHandler* h)
 {
     if (method == "GET")              handler_get    = h;
@@ -24,6 +26,8 @@ void Router::Node::SetHandler(std::string_view method, RequestHandler* h)
     }
 }
 
+// 获取指定 HTTP 方法的 handler（HEAD 回退到 GET）；无则返回 nullptr
+// 参数：method - HTTP 方法
 RequestHandler* Router::Node::GetHandler(std::string_view method) const
 {
     if (method == "GET")              return handler_get;
@@ -41,6 +45,7 @@ RequestHandler* Router::Node::GetHandler(std::string_view method) const
     return nullptr;
 }
 
+// 判断本节点是否持有任意方法的 handler
 bool Router::Node::HasHandler() const
 {
     return handler_any || handler_get || handler_post
@@ -48,6 +53,8 @@ bool Router::Node::HasHandler() const
         || (extra && !extra->empty());
 }
 
+// 添加静态子节点并记录其首字节到 indices
+// 参数：child - 子节点；childFirstByte - 子节点 path 的首字节；返回子节点裸指针
 Router::Node* Router::Node::AddStaticChild(std::unique_ptr<Node> child, char childFirstByte)
 {
     auto* raw = child.get();
@@ -56,6 +63,8 @@ Router::Node* Router::Node::AddStaticChild(std::unique_ptr<Node> child, char chi
     return raw;
 }
 
+// 添加 :param 动态子节点并设置 paramChild 快指针
+// 参数：child - 参数子节点；返回子节点裸指针
 Router::Node* Router::Node::AddParamChild(std::unique_ptr<Node> child)
 {
     auto* raw = child.get();
@@ -64,6 +73,8 @@ Router::Node* Router::Node::AddParamChild(std::unique_ptr<Node> child)
     return raw;
 }
 
+// 添加 *catchAll 兜底子节点并设置 catchAllChild 快指针
+// 参数：child - 兜底子节点；返回子节点裸指针
 Router::Node* Router::Node::AddCatchAllChild(std::unique_ptr<Node> child)
 {
     auto* raw = child.get();
@@ -76,15 +87,19 @@ Router::Node* Router::Node::AddCatchAllChild(std::unique_ptr<Node> child)
 // Router 构造 / 析构
 // ═══════════════════════════════════════════════════════════════════
 
+// 构造 Router：创建根节点
 Router::Router()
     : root_(std::make_unique<Node>()) {}
 
+// 析构：释放所有 handler 与节点
 Router::~Router() = default;
 
 // ═══════════════════════════════════════════════════════════════════
 // SetupFromConfig — auto-register routes from config
 // ═══════════════════════════════════════════════════════════════════
 
+// 从配置自动注册路由：静态文件兜底、代理路由、重定向规则、健康检查
+// 参数：cfg - 服务配置
 void Router::SetupFromConfig(const Config& cfg)
 {
     // Static file handler (default route)
@@ -128,6 +143,8 @@ void Router::SetupFromConfig(const Config& cfg)
 // 公开路由注册接口
 // ═══════════════════════════════════════════════════════════════════
 
+// 注册任意 HTTP 方法的 handler；尾部 "/" 视为前缀匹配
+// 参数：path - 路由路径；handler - 处理器（独占所有权）
 void Router::Add(std::string path, std::unique_ptr<RequestHandler> handler)
 {
     std::unique_lock lock(rw_mutex_);
@@ -151,6 +168,8 @@ void Router::Add(std::string path, std::unique_ptr<RequestHandler> handler)
     node->handler_any = raw;
 }
 
+// 注册指定 HTTP 方法的 handler
+// 参数：method - HTTP 方法；path - 路由路径；handler - 处理器（独占所有权）
 void Router::AddRoute(std::string method, std::string path,
                        std::unique_ptr<RequestHandler> handler)
 {
@@ -166,6 +185,8 @@ void Router::AddRoute(std::string method, std::string path,
 // 最长公共前缀
 // ═══════════════════════════════════════════════════════════════════
 
+// 计算两个路径的最长公共前缀长度
+// 参数：a - 路径 a；b - 路径 b；返回公共前缀长度
 size_t Router::LongestCommonPrefix(std::string_view a, std::string_view b)
 {
     size_t i = 0;
@@ -180,6 +201,8 @@ size_t Router::LongestCommonPrefix(std::string_view a, std::string_view b)
 // 找不到时返回空 string_view
 // ═══════════════════════════════════════════════════════════════════
 
+// 查找路径中第一个 :param 或 *catchAll 通配符（须位于段首）
+// 参数：path - 待查找路径；返回通配符子串，找不到返回空视图
 std::string_view Router::FindWildcard(std::string_view path)
 {
     for (size_t i = 0; i < path.size(); ++i) {
@@ -205,6 +228,8 @@ std::string_view Router::FindWildcard(std::string_view path)
 // 处理 :param / *catchAll 通配符，递归创建中间节点。
 // ═══════════════════════════════════════════════════════════════════
 
+// 在无共享前缀的节点下为剩余 path 创建完整子树（处理 :param / * 通配符）
+// 参数：node - 父节点；path - 剩余路径；handler - 处理器；method - HTTP 方法（空表示任意方法）
 void Router::InsertChild(Node* node, std::string_view path,
                           RequestHandler* handler, std::string_view method)
 {
@@ -275,6 +300,8 @@ void Router::InsertChild(Node* node, std::string_view path,
 //   4. 若 path 尚有剩余 → 通过 indices 查找/创建子节点，递归
 // ═══════════════════════════════════════════════════════════════════
 
+// 向压缩前缀树插入路由：LCP 分裂 + 递归落位 handler
+// 参数：node - 起始节点；path - 路由路径；handler - 处理器；method - HTTP 方法（空表示任意方法）；返回落位的节点
 Router::Node* Router::Insert(Node* node, std::string_view path,
                               RequestHandler* handler, std::string_view method)
 {
@@ -374,6 +401,8 @@ Router::Node* Router::Insert(Node* node, std::string_view path,
 //   5. 参数 prefixFallback 携带上级前缀匹配节点
 // ═══════════════════════════════════════════════════════════════════
 
+// 在压缩前缀树中查找路径对应的节点，沿途收集路径参数
+// 参数：node - 起始节点；path - 请求路径；params - 可选，接收捕获的参数；prefixFallback - 上级前缀匹配节点兜底；返回命中的节点或 nullptr
 const Router::Node* Router::Lookup(
     const Node* node,
     std::string_view path,
@@ -475,12 +504,16 @@ const Router::Node* Router::Lookup(
 // Match（公开匹配接口）
 // ═══════════════════════════════════════════════════════════════════
 
+// 剥离 query string（'?' 之后），仅用于路由匹配
+// 参数：path - 请求路径；返回去除 query 后的路径
 std::string_view Router::StripQuery(std::string_view path)
 {
     auto q = path.find('?');
     return q == std::string_view::npos ? path : path.substr(0, q);
 }
 
+// 按路径匹配 handler（任意方法，向后兼容）
+// 参数：path - 请求路径；params - 可选，接收捕获的路径参数；返回命中的 handler 或 nullptr
 RequestHandler* Router::Match(
     std::string_view path,
     std::vector<std::pair<std::string_view, std::string_view>>* params) const
@@ -494,6 +527,8 @@ RequestHandler* Router::Match(
          : nullptr;
 }
 
+// 按 HTTP 方法 + 路径匹配 handler
+// 参数：method - HTTP 方法；path - 请求路径；params - 可选，接收捕获的路径参数；返回命中的 handler 或 nullptr
 RequestHandler* Router::Match(
     std::string_view method,
     std::string_view path,

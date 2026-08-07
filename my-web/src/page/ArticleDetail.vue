@@ -83,11 +83,19 @@ const loading = ref(true)
 const error = ref('')
 const anchors = ref<AnchorItem[]>([])
 
+/**
+ * 接收 MdViewer 解析回传的标题锚点列表并存入响应式状态
+ * @param list 由 MdViewer 解析出的标题锚点数组
+ */
 const handleAnchors = (list: AnchorItem[]) => {
   anchors.value = list
 }
 
-// 加载文章 + 同分类列表（过滤当前篇）
+/**
+ * 加载文章详情及同分类文章列表（过滤掉当前篇）
+ * @param id 文章 id
+ * @returns 无返回值（结果写入 article / sameCategory / error 等响应式状态）
+ */
 const loadArticle = async (id: string) => {
   if (!id) return
   loading.value = true

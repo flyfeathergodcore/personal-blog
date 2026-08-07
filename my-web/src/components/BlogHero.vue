@@ -33,7 +33,9 @@ const emit = defineEmits(['search'])
 
 const keyword = ref('')
 
-// 回车触发搜索，把关键词交给父组件（父组件传入 ArticleList 过滤）
+/**
+ * 回车触发搜索：把关键词通过 search 事件交给父组件（用于 ArticleList 过滤）
+ */
 const doSearch = () => {
   emit('search', keyword.value)
 }

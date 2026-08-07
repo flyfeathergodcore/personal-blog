@@ -118,18 +118,26 @@ const activeIndex = ref(props.defaultActive)
 // 日夜切换：与前台主页看齐（全局 html.dark 主题 + localStorage 持久化）
 const { isDark, toggleTheme } = useTheme()
 
+/**
+ * 菜单选中：转发选中事件给父组件（含 index 与完整路径）
+ * @param key 选中菜单项的 index
+ * @param keyPath 选中项的完整 index 路径
+ */
 const handleSelect = (key: string, keyPath: string[]) => {
   console.log(key, keyPath)
   emit('menu-select', { key, keyPath })
 }
 
-// 当前选中的是否为工作区子栏（用于高亮「⋯」按钮）
+/**
+ * 当前选中的是否为工作区子栏（用于高亮「⋯」按钮）
+ */
 const isWorkItemActive = computed(() =>
   props.workItems.some((item) => item.index === activeIndex.value)
 )
 
-// 导航栏配色：暗色模式下不覆盖 CSS 变量（强制跟随暗色主题）；
-// 亮色模式下才应用外观设置的自定义颜色
+/**
+ * 导航栏配色：暗色模式不覆盖 CSS 变量（强制跟随暗色主题），亮色模式才应用外观自定义颜色
+ */
 const menuStyle = computed(() => {
   const style: Record<string, string> = {}
   if (isDark.value) return style
@@ -139,13 +147,18 @@ const menuStyle = computed(() => {
   return style
 })
 
-// 工作区子栏点击：模拟菜单选中，同步高亮并通知父组件
+/**
+ * 工作区子栏点击：模拟菜单选中，同步高亮并通知父组件
+ * @param key 点击子栏的 index
+ */
 const handleSubMenuCommand = (key: string) => {
   activeIndex.value = key
   emit('menu-select', { key, keyPath: [key] })
 }
 
-// 暴露方法和属性给父组件
+/**
+ * 暴露方法给父组件：重置选中态到默认「主页」项
+ */
 defineExpose({
   resetMenu: () => {
     activeIndex.value = '1'

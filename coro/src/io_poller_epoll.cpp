@@ -20,11 +20,15 @@ constexpr int kMaxEvents = 64;
 
 class EpollPoller final : public IoPoller {
 public:
+    // 构造函数：创建 epoll 实例
     EpollPoller() : epfd_(epoll_create1(0)) {}
+    // 析构函数：关闭 epoll 描述符
     ~EpollPoller() override {
         if (epfd_ >= 0) close(epfd_);
     }
 
+    // 注册 fd 监听事件（ET 模式）；已注册则 MOD 重挂，新 fd/复用号走 ADD
+    // 参数：fd - 文件描述符；events - READ/WRITE 事件组合；返回：成功为 true
     bool add(int fd, int events) override {
         struct epoll_event ev{};
         if (events & READ) ev.events |= EPOLLIN;
@@ -49,6 +53,8 @@ public:
         return epoll_ctl(epfd_, EPOLL_CTL_ADD, fd, &ev) == 0;
     }
 
+    // 修改 fd 监听事件
+    // 参数：fd - 文件描述符；events - 新事件组合；返回：成功为 true
     bool modify(int fd, int events) override {
         struct epoll_event ev{};
         if (events & READ) ev.events |= EPOLLIN;
@@ -57,11 +63,15 @@ public:
         return epoll_ctl(epfd_, EPOLL_CTL_MOD, fd, &ev) == 0;
     }
 
+    // 移除 fd 监听
+    // 参数：fd - 文件描述符；返回：成功为 true
     bool remove(int fd) override {
         struct epoll_event ev{};
         return epoll_ctl(epfd_, EPOLL_CTL_DEL, fd, &ev) == 0;
     }
 
+    // 阻塞等待事件，最多 timeout_ms（-1 = 无限）；超时返回空列表
+    // 参数：timeout_ms - 等待毫秒数；返回：就绪事件列表
     std::vector<ReadyEvent> wait(int timeout_ms) override {
         struct epoll_event evs[kMaxEvents];
         int n = epoll_wait(epfd_, evs, kMaxEvents, timeout_ms);
@@ -81,6 +91,7 @@ private:
     int epfd_;
 };
 
+// 平台工厂：返回 epoll 后端 poller
 std::unique_ptr<IoPoller> create_poller() {
     return std::make_unique<EpollPoller>();
 }

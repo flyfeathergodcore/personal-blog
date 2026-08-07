@@ -56,12 +56,21 @@ const loadError = ref('')
 
 // 大纲锚点数据（由 MdViewer 解析后回传，供右侧锚点组件渲染）
 const anchors = ref<AnchorItem[]>([])
+
+/**
+ * 接收 MdViewer 解析回传的标题锚点列表并存入响应式状态
+ * @param list 由 MdViewer 解析出的标题锚点数组
+ */
 const handleAnchors = (list: AnchorItem[]) => {
   anchors.value = list
 }
 
-// 拉取 md 文件内容并展示
-// TODO: 接后端后 fileUrl 由后台接口下发（如后台上传 md 后返回文件地址）
+/**
+ * 拉取 md 文件内容并展示，同时推断文档标题
+ * TODO: 接后端后 fileUrl 由后台接口下发（如后台上传 md 后返回文件地址）
+ * @param url md 文件地址（相对路径、完整 URL 或 data URL）
+ * @returns 无返回值（结果写入 mdContent / docName / loadError 等响应式状态）
+ */
 const loadContent = async (url: string) => {
   if (!url) {
     mdContent.value = ''

@@ -37,10 +37,14 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # ── coro 独立协程库 ──
 set(CORO_DIR "/home/ubuntu/coro" CACHE PATH "coro 独立协程库路径")
-if(NOT EXISTS ${CORO_DIR}/CMakeLists.txt)
-    message(FATAL_ERROR "coro 库未找到: ${CORO_DIR}")
+# 作为顶层统一构建的子目录时，coro 已由父工程 add_subdirectory，此处跳过
+# （重复 add 会 target 重定义）；独立构建时自动从 CORO_DIR 引入
+if(NOT TARGET coro)
+    if(NOT EXISTS ${CORO_DIR}/CMakeLists.txt)
+        message(FATAL_ERROR "coro 库未找到: ${CORO_DIR}")
+    endif()
+    add_subdirectory(${CORO_DIR} ${CMAKE_BINARY_DIR}/coro)
 endif()
-add_subdirectory(${CORO_DIR} ${CMAKE_BINARY_DIR}/coro)
 
 # ── Dependencies ──
 find_package(Threads REQUIRED)
@@ -120,10 +124,25 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
 endif()
 
 # ── 博客后端 MySQL 集成（连接池 + handler 并入 demo_server，静态链接）──
-# 连接池源码来自 mysql_connection_pool（含 coro 库，须与引擎共用同一份，
-# 避免 coro EventLoop TLS 双实例）；mysqlclient 提供 MySQL 8.0+ 非阻塞 API。
+# 两种模式：
+#   统一构建（顶层 add_subdirectory(mysql_connection_pool)）→ 链接连接池静态库
+#     target，其 PUBLIC include 自动提供 connectionpool.h 的解析路径；
+#   独立构建 → 传 -DMYSQL_POOL_DIR=... 把连接池源码直接编入 demo_server。
+# mysqlclient 提供 MySQL 8.0+ 非阻塞 API；coro 须与引擎共用同一份，避免
+# EventLoop TLS 双实例。
 set(MYSQL_POOL_DIR "" CACHE PATH "mysql_connection_pool 源码目录")
-if(MYSQL_POOL_DIR)
+if(TARGET mysql_connection_pool)
+    find_path(MYSQL_INCLUDE_DIR NAMES mysql/mysql.h)
+    find_library(MYSQL_LIBRARY NAMES mysqlclient libmysqlclient)
+    if(MYSQL_INCLUDE_DIR AND MYSQL_LIBRARY)
+        target_sources(demo_server PRIVATE src/handler/mysql_handler.cpp)
+        target_include_directories(demo_server PRIVATE ${MYSQL_INCLUDE_DIR})
+        target_link_libraries(demo_server PRIVATE mysql_connection_pool ${MYSQL_LIBRARY})
+        message(STATUS "MySQL 博客接口已启用 (链接 mysql_connection_pool target)")
+    else()
+        message(WARNING "未找到 MySQL client 库，博客接口将不可用")
+    endif()
+elseif(MYSQL_POOL_DIR)
     find_path(MYSQL_INCLUDE_DIR NAMES mysql/mysql.h)
     find_library(MYSQL_LIBRARY NAMES mysqlclient libmysqlclient)
     if(MYSQL_INCLUDE_DIR AND MYSQL_LIBRARY)

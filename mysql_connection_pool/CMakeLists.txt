@@ -12,8 +12,16 @@ endif()
 # 生成 compile_commands.json，给 VS Code / clangd 提供 IntelliSense 信息
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# 协程库与测试子目录
-add_subdirectory(coro)
+# 协程库统一使用外部 coro（不再内置副本，消除两份 coro 分叉 / ODR 风险）：
+# 默认取仓库根目录顶层 coro（即本文件上一级），可用 -DCORO_DIR=... 覆盖。
+set(CORO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../coro" CACHE PATH "外部 coro 独立协程库路径")
+# 作为顶层统一构建的子目录时 coro 已由父工程添加，跳过（避免 target 重定义）
+if(NOT TARGET coro)
+    if(NOT EXISTS ${CORO_DIR}/CMakeLists.txt)
+        message(FATAL_ERROR "coro 库未找到: ${CORO_DIR}（用 -DCORO_DIR=... 指定）")
+    endif()
+    add_subdirectory(${CORO_DIR} ${CMAKE_BINARY_DIR}/coro)
+endif()
 
 # 查找 MySQL 头文件路径
 # 约定: 代码中使用 #include <mysql/mysql.h>，所以需要找到 mysql/ 的父目录

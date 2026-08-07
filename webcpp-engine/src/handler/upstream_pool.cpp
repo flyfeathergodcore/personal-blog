@@ -2,6 +2,8 @@
 #include <algorithm>
 #include <iostream>
 
+// 构造：保存上游服务器列表（空列表时输出警告）
+// 参数：servers - 上游服务器列表
 UpstreamPool::UpstreamPool(std::vector<UpstreamServer> servers)
     : servers_(std::move(servers))
 {
@@ -9,6 +11,7 @@ UpstreamPool::UpstreamPool(std::vector<UpstreamServer> servers)
         std::cerr << "[upstream] 警告：无上游服务器" << std::endl;
 }
 
+// 轮询选取一个健康的上游；对冷却期已过的死节点自动恢复，全死则返回 nullptr
 const UpstreamServer* UpstreamPool::Pick()
 {
     if (servers_.empty()) return nullptr;
@@ -42,6 +45,8 @@ const UpstreamServer* UpstreamPool::Pick()
     return nullptr;  // all dead
 }
 
+// 上报一次失败：连续失败达到阈值时摘除该上游（标记死亡并记录时间）
+// 参数：server - 发生失败的上游（由 Pick 返回的指针）
 void UpstreamPool::ReportFailure(const UpstreamServer* server)
 {
     if (!server) return;
@@ -64,6 +69,8 @@ void UpstreamPool::ReportFailure(const UpstreamServer* server)
     }
 }
 
+// 上报一次成功：清零失败计数，若该上游处于死亡状态则恢复为健康
+// 参数：server - 请求成功的上游（由 Pick 返回的指针）
 void UpstreamPool::ReportSuccess(const UpstreamServer* server)
 {
     if (!server) return;

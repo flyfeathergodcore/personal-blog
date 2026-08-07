@@ -28,7 +28,9 @@ struct WsFrame {
 
 // ── Frame I/O (template, inline) ──
 
-/// Read exactly n bytes from stream (async)，超时透传（timeout_ms < 0 = 无限）。
+/// 从流中异步精确读取 n 字节，超时透传（timeout_ms < 0 = 无限等待）
+/// 参数：stream - 数据流；n - 需读取的字节数；timeout_ms - 超时（毫秒，<0 无限）
+/// 返回：读满 n 字节的字符串；出错/超时返回空串
 template<typename Stream>
 coro::Task<std::string> ReadExactly(Stream& stream, size_t n,
                                     int64_t timeout_ms = -1)
@@ -47,17 +49,20 @@ coro::Task<std::string> ReadExactly(Stream& stream, size_t n,
     co_return buf;
 }
 
-/// Unmask payload in-place (XOR with 4-byte masking key).
+/// 就地解除 payload 掩码（与 4 字节掩码键异或）
+/// 参数：payload - 待解码的负载数据；mask_key - 4 字节掩码键
 inline void UnmaskPayload(std::string& payload, const uint8_t mask_key[4])
 {
     for (size_t i = 0; i < payload.size(); i++)
         payload[i] ^= mask_key[i & 3];
 }
 
-/// Read one WebSocket frame from stream.
+/// 从流中读取一个 WebSocket 帧。
 /// 出错/超时/半读（header 读失败、扩展长度部分读、mask key 部分读、payload 短读）
 /// 一律返回 std::nullopt —— 绝不返回部分解析的帧，从而与合法零长度 Binary 帧
 /// 彻底区分。超时透传到每个 ReadExactly。
+/// 参数：stream - 数据流；timeout_ms - 超时（毫秒，<0 无限）
+/// 返回：解析出的帧；出错/超时/半读返回 std::nullopt
 template<typename Stream>
 coro::Task<std::optional<WsFrame>> ReadFrame(Stream& stream,
                                              int64_t timeout_ms = -1)
@@ -112,8 +117,9 @@ coro::Task<std::optional<WsFrame>> ReadFrame(Stream& stream,
     co_return frame;
 }
 
-/// Write one WebSocket frame to stream.
-/// Server → Client: mask=false.  Client → Server: mask=true (relay).
+/// 向流中写入一个 WebSocket 帧。
+/// Server → Client: mask=false；Client → Server: mask=true（中继）。
+/// 参数：stream - 数据流；opcode - 帧操作码；payload - 负载数据；fin - 是否结束帧（默认 true）；mask - 是否掩码（默认 false）
 template<typename Stream>
 coro::Task<void> WriteFrame(Stream& stream, WsOpcode opcode,
                             std::string payload, bool fin = true,
@@ -158,7 +164,8 @@ coro::Task<void> WriteFrame(Stream& stream, WsOpcode opcode,
     co_return;
 }
 
-/// Convenience: send a Close frame.
+/// 便捷函数：发送一个 Close 帧
+/// 参数：stream - 数据流；code - 关闭状态码（默认 1000）；reason - 关闭原因（默认空）
 template<typename Stream>
 coro::Task<void> WriteCloseFrame(Stream& stream,
                                  uint16_t code = 1000,
@@ -171,5 +178,6 @@ coro::Task<void> WriteCloseFrame(Stream& stream,
     co_await WriteFrame(stream, WsOpcode::Close, std::move(payload));
 }
 
-/// Compute Sec-WebSocket-Accept value from client key.
+/// 计算 WebSocket 握手应答值 Sec-WebSocket-Accept
+/// 参数：client_key - 客户端 Sec-WebSocket-Key；返回：Base64(SHA1(key + GUID))
 std::string ComputeWsAccept(std::string_view client_key);

@@ -2,12 +2,16 @@
 #include <algorithm>
 #include <iostream>
 
+// 获取线程局部单例（每 worker 一份连接池）
+// 参数：无；返回：本线程唯一的连接池实例
 UpstreamConnPool& UpstreamConnPool::Instance()
 {
     thread_local UpstreamConnPool pool;
     return pool;
 }
 
+// 析构函数：关闭并清理所有空闲连接
+// 参数：无
 UpstreamConnPool::~UpstreamConnPool()
 {
     // 析构前关闭所有空闲 socket
@@ -18,6 +22,8 @@ UpstreamConnPool::~UpstreamConnPool()
     entries_.clear();
 }
 
+// 获取 (host, port) 对应的空闲连接；无匹配或已失效返回 nullptr（会先清理过期连接）
+// 参数：host - 上游主机；port - 上游端口
 std::unique_ptr<UpstreamConnPool::Conn>
 UpstreamConnPool::Acquire(const std::string& host, unsigned short port)
 {
@@ -42,6 +48,8 @@ UpstreamConnPool::Acquire(const std::string& host, unsigned short port)
     return nullptr;
 }
 
+// 归还连接至空闲池供复用；池容量满时淘汰一条最久未用的连接
+// 参数：conn - 待归还连接（池接管所有权，调用后勿再使用）；host - 上游主机；port - 上游端口
 void UpstreamConnPool::Release(std::unique_ptr<Conn> conn,
                                 const std::string& host,
                                 unsigned short port)
@@ -70,11 +78,15 @@ void UpstreamConnPool::Release(std::unique_ptr<Conn> conn,
     entries_.push_back(std::move(entry));
 }
 
+// 返回当前空闲连接数
+// 参数：无；返回：空闲数量
 size_t UpstreamConnPool::IdleCount() const
 {
     return entries_.size();
 }
 
+// 淘汰过期/失效的空闲连接（空闲超时或 socket 已关闭）
+// 参数：无
 void UpstreamConnPool::EvictStale()
 {
     if (entries_.empty()) return;

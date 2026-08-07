@@ -10,6 +10,8 @@
 
 // ── Helpers for HTTP-date format (RFC 7231) and ETag ──
 
+// 将时间戳格式化为 HTTP-date（RFC 7231，GMT）字符串，用于 Last-Modified 头
+// 参数：t - Unix 时间戳
 static std::string FormatTime(time_t t)
 {
     char buf[64];
@@ -19,6 +21,8 @@ static std::string FormatTime(time_t t)
     return buf;
 }
 
+// 由修改时间与大小生成弱校验的 ETag 字符串，用于条件请求（304）
+// 参数：mtime - 文件修改时间；size - 文件大小
 static std::string FormatEtag(time_t mtime, size_t size)
 {
     char buf[48];
@@ -32,9 +36,13 @@ static Response GenerateDirectoryListing(
     const fs::path& dir, SessionRegion& pool,
     std::string_view virt_path);
 
+// 构造：绑定文件缓存（提供文档根目录与文件元数据）
+// 参数：cache - 文件缓存指针
 StaticFileHandler::StaticFileHandler(const FileCache* cache)
     : cache_(cache) {}
 
+// 处理静态文件请求：仅支持 GET；支持目录自动索引、条件请求(304)、Range 与 200 直出
+// 参数：ctx - HTTP 请求上下文；返回响应（404/403/304/206/200）
 Response StaticFileHandler::Handle(const Context& ctx)
 {
     auto* pool = ctx.Pool();
@@ -212,6 +220,8 @@ Response StaticFileHandler::Handle(const Context& ctx)
 
 // ── RedirectHandler ──
 
+// 处理重定向：按构造时指定的状态码与目标地址返回 Location 响应
+// 参数：ctx - HTTP 请求上下文
 Response RedirectHandler::Handle(const Context& ctx)
 {
     auto* pool = ctx.Pool();
@@ -226,6 +236,8 @@ Response RedirectHandler::Handle(const Context& ctx)
 
 // ── Directory listing (autoindex) ──
 
+// 生成目录自动索引 HTML 页面（隐藏文件跳过，目录在前、按名称排序，含上级链接）
+// 参数：dir - 磁盘目录路径；pool - 会话区（写入响应体）；virt_path - 展示用虚拟路径
 static Response GenerateDirectoryListing(
     const fs::path& dir, SessionRegion& pool,
     std::string_view virt_path)  // e.g. "/dashboard/" or "/"
@@ -324,6 +336,8 @@ static Response GenerateDirectoryListing(
     return resp;
 }
 
+// 规范化请求路径：去除查询串、拒绝相对路径（..//）等越权形态，目录路径补 index.html
+// 参数：raw - 原始请求路径；返回规范化后的安全路径，非法则返回空串
 std::string StaticFileHandler::NormalizePath(std::string_view raw) const
 {
     std::string p(raw);

@@ -27,11 +27,14 @@ public:
         int64_t connect_timeout_ms = 10000; // 新建连接超时
     };
 
+    // 构造函数：保存连接池配置并钳制参数到合法区间（min_size/max_size/超时）
+    // 参数：cfg - 连接池配置
     explicit connectionpool(const Config& cfg);
+    // 析构函数：调用 close() 关闭连接池并销毁全部连接
     ~connectionpool();   // 调用 close()
 
-    connectionpool(const connectionpool&) = delete;
-    connectionpool& operator=(const connectionpool&) = delete;
+    connectionpool(const connectionpool&) = delete;  // 禁止拷贝
+    connectionpool& operator=(const connectionpool&) = delete;  // 禁止拷贝赋值
 
     // 借连接：空闲直接给；未到上限新建；满池挂起等待，直到有连接归还或 borrow_timeout 超时
     coro::Task<connection*> async_borrow();
@@ -58,14 +61,22 @@ private:
         std::size_t id_ = 0;
         connection* granted_ = nullptr;   // 归还方交接的连接；null = 尚未获得
 
+        // 本 awaiter 永远不立即就绪（始终登记到池等待队列挂起）
         bool await_ready() noexcept { return false; }
+        // 挂起：登记到池等待队列；池已关闭则立即唤醒（await_resume 抛异常）
+        // 参数：h - 借用协程句柄，供归还/超时/关闭唤醒
         void await_suspend(std::coroutine_handle<> h);
+        // 被归还唤醒返回连接；超时/关闭抛异常
         connection* await_resume();   // 被归还唤醒返回连接；超时/关闭抛异常
     };
 
     // 以下均在 mu_ 保护下操作
-    bool register_waiter(PoolWaitAwaiter* w);   // 登记 + 注册借用超时定时器；池已关闭返回 false
-    void remove_waiter(std::size_t id);         // 等待者自我清理（超时唤醒后）
+    // 登记等待者并注册借用超时定时器；池已关闭返回 false（调用方须立即唤醒）
+    // 参数：w - 等待者 awaiter（登记后由池持有其指针）
+    bool register_waiter(PoolWaitAwaiter* w);
+    // 等待者自我清理：按 id 从等待队列移除（超时唤醒后调用，幂等）
+    // 参数：id - 等待者登记时分配的 id
+    void remove_waiter(std::size_t id);
 
     std::mutex mu_;
     std::string host_, user_, password_, database_;

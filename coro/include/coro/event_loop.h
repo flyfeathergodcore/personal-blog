@@ -20,6 +20,7 @@ namespace coro {
 // 协程句柄哈希：GCC 11 的 libstdc++ 未提供 std::hash<std::coroutine_handle<>>（GCC 12+ 才加入），
 // 这里自定义按协程帧地址取哈希，跨编译器（GCC 11 / clang libc++）均可用。
 struct CoroHandleHash {
+    // 按协程帧地址计算哈希
     std::size_t operator()(std::coroutine_handle<> h) const noexcept {
         return std::hash<void*>{}(h.address());
     }
@@ -27,11 +28,13 @@ struct CoroHandleHash {
 
 class EventLoop {
 public:
+    // 构造函数：创建唤醒管道与平台 poller，并登记当前线程关联的事件循环
     EventLoop();
+    // 析构函数：stop 后统一销毁残留协程帧并关闭唤醒管道
     ~EventLoop();
 
-    EventLoop(const EventLoop&) = delete;
-    EventLoop& operator=(const EventLoop&) = delete;
+    EventLoop(const EventLoop&) = delete;  // 禁止拷贝
+    EventLoop& operator=(const EventLoop&) = delete;  // 禁止拷贝赋值
 
     // 当前线程进入事件循环，直到 stop()（可多线程同时调用）
     void run();
@@ -77,6 +80,7 @@ private:
         int io_fd;                // -1 = 纯定时器，-2 = 可取消定时器（wait_timer_cancelable）
     };
     struct TimerCmp {
+        // 小顶堆比较：deadline 更早的条目排前面
         bool operator()(const TimerEntry& a, const TimerEntry& b) const {
             return a.deadline_ms > b.deadline_ms;
         }
@@ -87,6 +91,7 @@ private:
         std::size_t id;
     };
 
+    // 取当前单调时钟毫秒值（超时计算用）
     int64_t now_ms() const;
     void wake();  // 写唤醒管道
 

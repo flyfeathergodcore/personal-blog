@@ -63,7 +63,9 @@ const activeCategory = ref(props.initialCategory)
 const page = ref(1)
 const pageSize = 6
 
-// 拉取列表与分类（预留接口 + mock）
+/**
+ * 拉取文章列表与分类数据；失败时写入 error 用于展示重试入口
+ */
 const fetchData = async () => {
   loading.value = true
   error.value = ''
@@ -81,16 +83,23 @@ const fetchData = async () => {
   }
 }
 
-// 分类切换：重置到第一页并通知父组件
+/**
+ * 分类切换：重置分页到第一页并通知父组件
+ * @param val 选中的分类名
+ */
 const handleCategoryChange = (val: string) => {
   page.value = 1
   emit('category-change', val)
 }
 
-// 分类变化时重新请求
+/**
+ * 监听分类变化：切换时重新请求文章列表
+ */
 watch(activeCategory, fetchData)
 
-// 搜索过滤（标题/摘要包含关键词）
+/**
+ * 搜索过滤：标题或摘要包含关键词的文章（关键词为空时返回全部）
+ */
 const filteredArticles = computed(() => {
   const kw = props.searchKeyword.trim().toLowerCase()
   if (!kw) return allArticles.value
@@ -99,7 +108,9 @@ const filteredArticles = computed(() => {
   )
 })
 
-// 当前页文章
+/**
+ * 当前页文章：对过滤结果按 page/pageSize 切片
+ */
 const pagedArticles = computed(() => {
   const start = (page.value - 1) * pageSize
   return filteredArticles.value.slice(start, start + pageSize)

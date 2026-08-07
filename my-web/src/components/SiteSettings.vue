@@ -104,7 +104,9 @@ const form = reactive<BlogConfig>({
 // 工作区子栏：从全局 store 读（后端为事实源，非本机 localStorage 独享）
 const workItems = ref(getWorkItems().map((w) => ({ ...w })))
 
-// 挂载时拉后端最新全局配置，同步进编辑表单（其他设备改过的配置在此面板可见）
+/**
+ * 生命周期：挂载时拉取后端最新全局配置并同步进编辑表单（其他设备改过的配置可见）
+ */
 onMounted(async () => {
   await initBlogConfig()
   Object.assign(form, {
@@ -121,7 +123,9 @@ onMounted(async () => {
 const imagePickerVisible = ref(false)
 const imageList = ref<Resource[]>([])
 
-// 打开资源库选择弹窗：只展示图片资源（type==='image'），视频等非图片不参与选背景
+/**
+ * 打开资源库选择弹窗：只加载图片资源（type==='image'），视频等非图片不参与选背景
+ */
 const openImagePicker = async () => {
   try {
     const all = await getResources()
@@ -133,15 +137,21 @@ const openImagePicker = async () => {
   imagePickerVisible.value = true
 }
 
-// 选中图片：背景存文件接口路径（/api/img/:id），前台按需加载。
-// 不走完整 data URL——大图 data URL 传输慢，且塞进 localStorage.blogConfig 会超限。
+/**
+ * 选中图片作为背景：背景存文件接口短路径（/api/img/:id）按需加载；
+ * 不走完整 data URL——大图传输慢且塞进 localStorage.blogConfig 会超限
+ * @param img 选中的图片资源
+ */
 const pickImage = (img: Resource) => {
   form.background = '/api/img/' + img.id
   imagePickerVisible.value = false
   ElMessage.success('已选择背景图，点「保存设置」生效')
 }
 
-// 工作区子栏变更：即时同步全局 store + 本地缓存（后端在「保存设置」时一并提交）
+/**
+ * 工作区子栏变更：即时同步全局 store 与本地缓存（后端在「保存设置」时一并提交）
+ * @param items 最新子栏列表
+ */
 const handleWorkItemsChange = (items: { label: string; index: string; path: string }[]) => {
   blogConfigState.workItems = items.map((w) => ({ ...w }))
   localStorage.setItem('blogWorkItems', JSON.stringify(items))
@@ -151,7 +161,9 @@ const handleWorkItemsChange = (items: { label: string; index: string; path: stri
 const newMenuLabel = ref('')
 const newMenuPath = ref('')
 
-// 添加菜单：校验空值 + 重复路径
+/**
+ * 添加菜单项：校验名称/路径非空与路径不重复，通过后追加并清空输入
+ */
 const addMenu = () => {
   const label = newMenuLabel.value.trim()
   const path = newMenuPath.value.trim()
@@ -166,13 +178,18 @@ const addMenu = () => {
   newMenuPath.value = ''
 }
 
-// 删除菜单
+/**
+ * 删除指定下标的菜单项
+ * @param index 菜单项下标
+ */
 const removeMenu = (index: number) => {
   form.navMenus.splice(index, 1)
 }
 
-// 保存：写本地缓存（本设备即时）+ 更新全局 store（同浏览器立即生效）
-// + 写后端 blog_config（所有设备全局生效，删除「关于」等对所有设备可见）
+/**
+ * 保存设置：写本地缓存（本设备即时）+ 更新全局 store（同浏览器立即生效）
+ * + 写后端 blog_config（所有设备全局生效）
+ */
 const save = async () => {
   const config = {
     ...form,

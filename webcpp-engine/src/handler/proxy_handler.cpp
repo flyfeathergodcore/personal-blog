@@ -12,6 +12,8 @@
 
 // ── Helpers ──
 
+// 从缓冲区当前位置读取一行（CRLF 结尾，不含换行符），成功返回 true 并推进 pos
+// 参数：buf - 缓冲区内容；pos - 读取起始位置（成功后被推进到下一行）；line - 输出行内容
 static bool ReadLine(const std::string& buf, size_t& pos, std::string& line)
 {
     auto cr = buf.find('\r', pos);
@@ -22,9 +24,13 @@ static bool ReadLine(const std::string& buf, size_t& pos, std::string& line)
     return true;
 }
 
+// 构造：保存单一上游的转发配置
+// 参数：upstream - 上游地址与端口配置
 ProxyHandler::ProxyHandler(UpstreamConfig upstream)
     : upstream_(std::move(upstream)) {}
 
+// 同步路径不支持——需要 I/O，统一返回 502
+// 参数：ctx - HTTP 请求上下文
 Response ProxyHandler::Handle(const Context& ctx)
 {
     // 同步路径不支持——需要 I/O。
@@ -34,7 +40,9 @@ Response ProxyHandler::Handle(const Context& ctx)
 // ═══════════════════════════════════════════════════════════════════
 // HandleAsync — 建连 → 发送（Connection: close）→ 读响应（读到 EOF）
 // ═══════════════════════════════════════════════════════════════════
-
+// 处理异步转发：向单一上游建连并发送请求，声明 Connection: close，
+// 读到 EOF 取回完整响应体后组装响应
+// 参数：ctx - HTTP 请求上下文；返回组装好的响应
 coro::Task<Response> ProxyHandler::HandleAsync(const Context& ctx)
 {
     auto* pool = ctx.Pool();

@@ -30,8 +30,11 @@ class LogWriter {
     struct Chunk {
         static constexpr size_t MAX = 4096;
         std::vector<std::string> entries;
+        // 构造：预分配条目录入容量
         Chunk() { entries.reserve(MAX); }
+        // 判断块是否已满（达到条数上限）
         bool Full() const { return entries.size() >= MAX; }
+        // 判断块是否为空
         bool Empty() const { return entries.empty(); }
     };
 
@@ -47,15 +50,26 @@ class LogWriter {
     static inline thread_local Chunk* tls_q_ = nullptr;
     static inline thread_local uint64_t tls_epoch_ = 0;
 
+    // 启动后台写入线程（惰性，仅在首次写入时触发）
     void Start();
+    // 获取当前线程本地日志块（无则从空闲池取或新建）
     Chunk* GetQueue();
+    // 提交日志块给后台线程，并清空线程本地指针
+    // 参数：q - 待写入的日志块
     void Submit(Chunk* q);
+    // 后台写入线程主循环：消费 ready_ 队列并落盘
     void Loop();
 
 public:
+    // 构造写入器（仅记录文件名，线程惰性启动）
+    // 参数：filename - 日志文件路径
     LogWriter(const std::string& filename) : filename_(filename) {}
+    // 析构：停止写入线程并关闭文件
     ~LogWriter() { Stop(); }
+    // 异步写入一条日志（无锁路径，热线程友好）
+    // 参数：msg - 日志内容
     void Write(std::string msg);
+    // 停止后台线程并关闭文件
     void Stop();
 };
 
@@ -169,6 +183,7 @@ inline void LogWriter::Stop()
 
 class Logger {
 public:
+    // 返回全局单例
     static Logger& Instance() { static Logger inst; return inst; }
 
     // 配置日志目录与级别；默认（未 Init）等价于 Init("./logs", LogLevel::Info)。
@@ -211,6 +226,7 @@ public:
         return std::snprintf(buf, cap, "%s.%03ld", cached_base, (long)ms.count());
     }
 
+    // 返回当前时间戳字符串（格式 "YYYY-MM-DD HH:MM:SS.mmm"）
     static std::string Timestamp() {
         char buf[40];
         AppendTimestamp(buf, sizeof(buf));
@@ -236,6 +252,8 @@ public:
         gw().Write(std::string(buf, static_cast<std::size_t>(n)));
     }
 
+    // 写入业务日志（business.log）
+    // 参数：module - 模块名；action - 动作；detail - 详情
     void Business(const std::string& module, const std::string& action,
                   const std::string& detail)
     {
@@ -244,6 +262,8 @@ public:
         biz().Write(msg);
     }
 
+    // 写入性能日志（perf.log）：请求量、平均耗时、worker 数与内存
+    // 参数：total_req - 总请求数；total_latency_us - 总延迟（微秒）；active_workers - 活跃 worker 数；total_workers - 总 worker 数；mem_kb - 内存（KB）
     void Perf(uint64_t total_req, uint64_t total_latency_us,
               int active_workers, int total_workers,
               uint64_t mem_kb)
@@ -260,10 +280,13 @@ public:
         perf().Write(buf);
     }
 
+    // 停止全部日志写入器
     static void StopAll() { Instance().stopAllImpl(); }
 
 private:
+    // 私有构造（单例）
     Logger() = default;
+    // 析构：停止全部写入器
     ~Logger() { stopAllImpl(); }
     Logger(const Logger&) = delete;
 
@@ -276,6 +299,8 @@ private:
         perf().Stop();
     }
 
+    // 初始化日志目录与级别
+    // 参数：dir - 日志目录；level - 日志级别
     void init(const std::string& dir, LogLevel level)
     {
         {
@@ -285,6 +310,8 @@ private:
         level_.store(level, std::memory_order_relaxed);
     }
 
+    // 按级别过滤并写入业务日志；WARN/ERROR 额外输出到 stderr
+    // 参数：level - 日志级别；module - 模块名；msg - 日志内容
     void log(LogLevel level, const std::string& module, const std::string& msg)
     {
         if (level < level_.load(std::memory_order_relaxed)) return;  // 阈值过滤
@@ -297,6 +324,8 @@ private:
         }
     }
 
+    // 将日志级别枚举映射为字符串
+    // 参数：l - 日志级别；返回级别名称（"DEBUG" 等）
     static const char* LevelName(LogLevel l)
     {
         switch (l) {

@@ -19,6 +19,7 @@ public:
         int events;  // Event 组合
     };
 
+    // 虚析构函数：保证派生类（epoll/kqueue）正确清理
     virtual ~IoPoller() = default;
 
     // 注册 fd 监听事件（edge-triggered：epoll 后端加 EPOLLET；就绪后不摘除，

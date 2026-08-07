@@ -28,6 +28,7 @@ private:
         std::size_t size;    // 块总大小（桶容量）
     };
 
+    // 获取内存池单例
     static FramePool& instance();
 
     BlockHeader* free_lists_[kNumBuckets] = {};

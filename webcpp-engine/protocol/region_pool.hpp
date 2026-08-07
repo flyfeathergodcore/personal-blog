@@ -17,9 +17,12 @@ public:
     static constexpr size_t kPoolSize  = 256UL * 1024 * 1024; // 256 MB
     static constexpr size_t kMinRegion = 4096;
 
+    // 构造：mmap 预分配 256MB 虚拟内存
     RegionPool();
+    // 析构：munmap 释放内存
     ~RegionPool();
 
+    // 禁止拷贝/赋值（独占大块内存）
     RegionPool(const RegionPool&) = delete;
     RegionPool& operator=(const RegionPool&) = delete;
 
@@ -30,6 +33,8 @@ public:
     /// Return a region to the pool.
     void Release(size_t offset, size_t size);
 
+    // 返回池内存基址
+    // 参数：无
     char* Base() const { return base_; }
 
 private:

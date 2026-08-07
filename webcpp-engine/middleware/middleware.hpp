@@ -20,6 +20,7 @@
 class Middleware {
 public:
     enum class Type { PreRequest, PostResponse, Both };
+    // 虚析构，确保派生类正确释放
     virtual ~Middleware() = default;
 
     /// 标识此中间件在哪一个（或两个）阶段运行。
@@ -111,7 +112,10 @@ private:
 // 注入跨域头，OPTIONS 请求直接返回 204。
 class CORSMiddleware : public Middleware {
 public:
+    // 返回中间件阶段：PreRequest
     Type GetType() const override { return Type::PreRequest; }
+    // CORS 预检处理：OPTIONS 返回 204，其余注入跨域响应头
+    // 参数：ctx - 请求上下文
     Response HandlePre(Context& ctx) override;
 };
 
@@ -119,7 +123,10 @@ public:
 // 转发或生成请求 ID，注入响应头，日志中使用。
 class RequestIdMiddleware : public Middleware {
 public:
+    // 返回中间件阶段：PreRequest
     Type GetType() const override { return Type::PreRequest; }
+    // 转发或生成 X-Request-Id 并注入请求上下文与响应头
+    // 参数：ctx - 请求上下文
     Response HandlePre(Context& ctx) override;
     /// Generate a short unique ID into pool (zero heap alloc)
     static std::string_view GenerateId(SessionRegion& pool);
@@ -129,12 +136,17 @@ public:
 // handler 完成后记录 Method + Path。
 class LoggingMiddleware : public Middleware {
 public:
+    // 返回中间件阶段：PostResponse
     Type GetType() const override { return Type::PostResponse; }
+    // 异步后置处理：记录请求访问日志
+    // 参数：ctx - 请求上下文；status_code - 状态码；bytes_sent - 响应字节数；elapsed_us - 请求耗时（微秒）；worker_id - worker ID
     coro::Task<void> HandlePost(const Context& ctx,
                                 int status_code,
                                 size_t bytes_sent,
                                 uint64_t elapsed_us,
                                 int worker_id) override;
+    // 同步后置处理：记录请求访问日志（零协程帧开销）
+    // 参数：ctx - 请求上下文；status_code - 状态码；bytes_sent - 响应字节数；elapsed_us - 请求耗时（微秒）；worker_id - worker ID
     void HandlePostSync(const Context& ctx,
                         int status_code,
                         size_t bytes_sent,
@@ -149,15 +161,24 @@ class MetricsCollector;
 // Post: 记录每请求指标（耗时、状态码、字节数）
 class MetricsMiddleware : public Middleware {
 public:
+    // 构造指标中间件
+    // 参数：collector - 指标收集器指针（不拥有）
     explicit MetricsMiddleware(MetricsCollector* collector)
         : collector_(collector) {}
+    // 返回中间件阶段：Both（Pre + Post）
     Type GetType() const override { return Type::Both; }
+    // PreRequest：拦截 /metrics.json、/dashboard、/metrics/stream 端点
+    // 参数：ctx - 请求上下文
     Response HandlePre(Context& ctx) override;
+    // 异步后置处理：上报每请求指标
+    // 参数：ctx - 请求上下文；status_code - 状态码；bytes_sent - 响应字节数；elapsed_us - 请求耗时（微秒）；worker_id - worker ID
     coro::Task<void> HandlePost(const Context& ctx,
                                 int status_code,
                                 size_t bytes_sent,
                                 uint64_t elapsed_us,
                                 int worker_id) override;
+    // 同步后置处理：上报每请求指标
+    // 参数：ctx - 请求上下文；status_code - 状态码；bytes_sent - 响应字节数；elapsed_us - 请求耗时（微秒）；worker_id - worker ID
     void HandlePostSync(const Context& ctx,
                         int status_code,
                         size_t bytes_sent,
