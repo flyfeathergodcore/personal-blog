@@ -39,70 +39,62 @@
 │   ├── sql/               # 数据库初始化脚本（init.sql）
 │   ├── config/            # 服务配置（blog.yaml）
 │   ├── Dockerfile         # 两阶段构建镜像
-│   └── build-run.sh       # 一键构建 + 部署脚本
+│   └── build-run.sh       # 一键构建 + 部署脚本（跨平台）
 ├── mysql_connection_pool/ # MySQL 异步连接池（C++ 协程，含内部 coro 副本）
 └── coro/                  # 自研 C++20 协程库（epoll / kqueue 事件循环）
 ```
 
-## 🚀 构建与运行
+## 🚀 Docker 构建与运行（macOS / Linux / Windows）
 
-依赖环境：Node.js（构建前端）、Docker（构建运行容器）、MySQL 8.0 容器（名称 `mysql1`）。
+依赖环境（三平台通用）：**Node.js 18+**（构建前端）、**Docker**（构建运行容器）、**MySQL 8.0 容器**（名称 `mysql1`）。
+
+### 1. 按平台安装 Docker 与 bash
+
+| 平台 | Docker 安装 | 执行脚本的 bash 环境 |
+|---|---|---|
+| macOS | [Docker Desktop](https://www.docker.com/products/docker-desktop/) | 系统自带 |
+| Linux | Docker Engine（`apt install docker.io` 或官方源） | 系统自带 |
+| Windows | [Docker Desktop](https://www.docker.com/products/docker-desktop/)（启用 WSL2 后端） | [Git Bash](https://git-scm.com/)（Git for Windows）或 WSL2 |
+
+前端构建（`npm install && npm run build`）三个平台均原生支持，无需额外环境。
+
+### 2. 部署步骤（三个平台完全一致）
 
 ```bash
-# 1. 初始化数据库（在 MySQL 容器 mysql1 中执行）
+# ① 启动 MySQL 容器，并加入自定义网络（后端按容器名 mysql1 互连）
+docker run -d --name mysql1 -e MYSQL_ROOT_PASSWORD=123456 mysql:8.0
+docker network create blog-net
+docker network connect blog-net mysql1
+
+# ② 初始化数据库
 docker exec -i mysql1 mysql -uroot -p123456 < webcpp-engine/sql/init.sql
 
-# 2. 一键构建 + 启动（内部流程：npm build 前端 → docker build 镜像 → 启动容器 → 启动局域网转发器）
+# ③ 构建前端
+cd my-web && npm install && npm run build
+
+# ④ 一键构建镜像 + 启动容器 + 启动局域网转发器
 cd webcpp-engine && ./build-run.sh
 
-# 3. 访问
+# ⑤ 访问
 #    本机    : http://localhost:8443
-#    局域网   : 后台「工作区设置」开启局域网访问后，手机 / 平板等同一 WiFi 设备访问
+#    局域网   : 后台「工作区设置」开启局域网访问后，同一 WiFi 下的设备访问
 ```
 
-> 说明：`mysql_connection_pool`（MySQL 异步连接池）与 `coro`（协程库）均已包含在本仓库中。
-> 镜像构建 context 需为仓库的**上级目录**（Dockerfile 的 COPY 路径为 `vue-web/...`），见
-> `webcpp-engine/Dockerfile` 注释。
+> **说明**
+> - `build-run.sh` 已跨平台：局域网 IP 自动探测支持 macOS / Linux / WSL2 / Windows（Git Bash），
+>   Python 解释器自动探测 `python3` / `python`。Windows 下用 Git Bash 或 WSL2 执行即可，**步骤与上完全一致**。
+> - `mysql_connection_pool`（MySQL 异步连接池）与 `coro`（协程库）均已包含在本仓库；镜像构建 context
+>   需为仓库的**上级目录**（Dockerfile 的 COPY 路径为 `vue-web/...`），见 `webcpp-engine/Dockerfile` 注释。
 
-## 🪟 Windows 部署
+### 3. 平台差异速查
 
-> **结论**：Windows 上可正常部署，但有两条硬性约束——
-> ① 后端**只支持 Docker 容器 / WSL2（Linux 内核）方式运行**，不支持原生编译（见文末说明）；
-> ② `build-run.sh` 是 bash 脚本，需用 **Git Bash 或 WSL2** 执行（局域网 IP 探测已跨平台支持
-> macOS / Linux / Windows）。
+| 场景 | 说明 |
+|---|---|
+| Windows 局域网共享 | Docker Desktop 端口映射到 Windows 主机，局域网设备直接访问 Windows 局域网 IP 即可 |
+| WSL2 内直接跑服务（不走 Docker） | 需 `netsh interface portproxy` 转发或 WSL 镜像网络模式，局域网设备才能直连 |
+| 局域网 IP 自动探测失败（如多网卡取错） | 手动指定：`export HOST_LAN_IP="192.168.x.x"` 后再执行 `./build-run.sh` |
 
-### 方式一：Docker Desktop + Git Bash（推荐）
-
-1. **安装 [Docker Desktop](https://www.docker.com/products/docker-desktop/)**（启用 WSL2 后端），并安装 [Git for Windows](https://git-scm.com/)（提供 Git Bash）与 Node.js 18+。
-2. **启动 MySQL 容器**（名称 `mysql1`，与后端在同一自定义网络）：
-   ```bash
-   docker run -d --name mysql1 -e MYSQL_ROOT_PASSWORD=123456 mysql:8.0
-   docker network create blog-net
-   docker network connect blog-net mysql1
-   ```
-3. **初始化数据库**（在 Git Bash 中）：
-   ```bash
-   docker exec -i mysql1 mysql -uroot -p123456 < webcpp-engine/sql/init.sql
-   ```
-4. **构建前端**（Windows 原生 npm 即可，无需 WSL）：
-   ```bash
-   cd my-web && npm install && npm run build
-   ```
-5. **一键构建 + 启动**（在 Git Bash 中执行）：
-   ```bash
-   cd webcpp-engine && ./build-run.sh
-   ```
-6. 访问 **http://localhost:8443**，局域网设备访问后台「工作区设置」开启后显示的局域网地址。
-
-> **局域网 IP 探测**：`build-run.sh` 已跨平台自动探测本机局域网 IP（macOS 用默认路由网卡、
-> Linux/WSL2 用 iproute2、Windows 用 PowerShell/ipconfig），通常无需手动设置。若自动探测不到
-> （如多网卡取错），可手动指定后执行：
-> ```bash
-> export HOST_LAN_IP="192.168.x.x"      # 手动指定本机局域网 IP
-> cd webcpp-engine && ./build-run.sh
-> ```
-
-### 方式二：WSL2 内直接编译运行（不走 Docker，适合开发）
+### 4. 可选：WSL2 / Linux 内直接编译运行（不走 Docker）
 
 WSL2 提供完整 Linux 内核，epoll 与 GCC 12 均可用：
 
@@ -114,7 +106,7 @@ sudo apt update && sudo apt install -y gcc-12 g++-12 cmake \
 # 2. 构建前端
 cd my-web && npm install && npm run build
 
-# 3. 准备本地运行配置（基于仓库配置改 doc_root 与 MySQL 地址，需 MySQL 可达）
+# 3. 准备本地运行配置（仓库内 blog.yaml 为 Docker 容器专用，需改 doc_root 与 MySQL 地址）
 cat > webcpp-engine/build/local.yaml <<'EOF'
 server:
   host: 0.0.0.0
@@ -144,15 +136,14 @@ cmake --build webcpp-engine/build -j --target demo_server
 ```
 
 > 注：MySQL 需让 `127.0.0.1:3306` 可达（如 `docker run -d --name mysql1 -p 3306:3306 -e MYSQL_ROOT_PASSWORD=123456 mysql:8.0`）。
-> WSL2 是 NAT 网络，若要让**局域网设备**直连 WSL 内监听的服务，还需 `netsh interface portproxy` 转发或使用 WSL 镜像网络模式。
 
-### 原生 Windows 编译限制（不建议）
+### 5. 原生编译限制
 
-- **事件循环**：`coro` 协程库只有 epoll（Linux）/ kqueue（macOS）实现，**没有 Windows IOCP**，原生编译链接必然失败；
-- **协程 ABI**：后端用 GCC `-fcoroutines` 专用 ABI（Dockerfile 注释明确 MSVC/clang 不兼容），MSVC 无法编译；
-- **系统调用**：依赖 `<sys/epoll.h>` / `<sys/event.h>` 等 POSIX 头文件，Windows 不存在。
+- **事件循环**：`coro` 协程库只有 epoll（Linux）/ kqueue（macOS）实现，**没有 Windows IOCP**，Windows 不支持原生编译，必须走 Docker / WSL2；
+- **协程 ABI**：后端用 GCC `-fcoroutines` 专用 ABI（MSVC / clang 不兼容），需 GCC 12；
+- **系统调用**：依赖 `<sys/epoll.h>` / `<sys/event.h>` 等 POSIX 头文件。
 
-前端 `my-web`（Vue/Vite）本身完全跨平台，可在任意平台构建。
+前端 `my-web`（Vue/Vite）完全跨平台，可在任意平台构建。
 
 ## 📊 性能参考
 
