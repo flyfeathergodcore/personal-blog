@@ -715,6 +715,33 @@ void H2Session::WriteResponseHeaders(int32_t sid, const Response& resp)
 //   - WS 并发由 asio::co_spawn 改为 net::spawn(loop_)
 // ═══════════════════════════════════════════════════════════════
 
+// WS 处理器协程：原为 HandleStream 内立即调用的 lambda 协程，闭包临时对象在
+// 赋值语句后销毁、协程被 spawn 长期挂起 → 闭包 this/捕获悬垂（GCC 侥幸不崩，
+// clang 严格按标准 use-after-scope）。提为静态成员：h2self/conn 按值
+// （shared_ptr 拷贝）进帧，挂起期间始终存活，跨编译器安全。
+coro::Task<void> H2Session::RunWsHandler(
+    std::shared_ptr<H2Session> h2self, int32_t stream_id,
+    std::shared_ptr<H2WsConnection> conn, RequestHandler* ws_handler)
+{
+    try {
+        auto& ws_ctx = h2self->streams_.at(stream_id);
+        co_await ws_handler->HandleWebSocket(ws_ctx, *conn);
+        h2self->WriteRstStream(stream_id, H2Error::NO_ERROR);
+    } catch (std::exception& e) {
+        std::cerr << "[h2] WS handler error: "
+                  << e.what() << std::endl;
+        h2self->WriteRstStream(stream_id, H2Error::INTERNAL_ERROR);
+    }
+    co_await h2self->FlushOutput();
+    conn->MarkClosed();
+    conn.reset();
+    h2self->streams_.erase(stream_id);
+    h2self->stream_mgr_.RemoveStream(stream_id);
+    if (h2self->streams_.empty())
+        h2self->Region().Reset();
+    co_return;
+}
+
 coro::Task<void> H2Session::HandleStream(int32_t stream_id)
 {
     auto it = streams_.find(stream_id);
@@ -807,29 +834,11 @@ coro::Task<void> H2Session::HandleStream(int32_t stream_id)
                 auto h2self = std::static_pointer_cast<H2Session>(
                     this->shared_from_this());
 
+                // 立即调用的 lambda 协程闭包是临时对象，spawn 后协程长期挂起，
+                // 闭包销毁 → this/捕获悬垂（GCC 侥幸、clang 必崩）；提为静态成员
+                // 协程 RunWsHandler，h2self/conn 按值（shared_ptr 拷贝）进帧，挂起安全。
                 coro::Task<void> ws_task =
-                    [h2self, stream_id, conn = std::move(conn), ws_handler]()
-                        mutable -> coro::Task<void>
-                {
-                    try {
-                        auto& ws_ctx = h2self->streams_.at(stream_id);
-                        co_await ws_handler->HandleWebSocket(ws_ctx, *conn);
-                        h2self->WriteRstStream(stream_id, H2Error::NO_ERROR);
-                    } catch (std::exception& e) {
-                        std::cerr << "[h2] WS handler error: "
-                                  << e.what() << std::endl;
-                        h2self->WriteRstStream(stream_id,
-                                                H2Error::INTERNAL_ERROR);
-                    }
-                    co_await h2self->FlushOutput();
-                    conn->MarkClosed();
-                    conn.reset();
-                    h2self->streams_.erase(stream_id);
-                    h2self->stream_mgr_.RemoveStream(stream_id);
-                    if (h2self->streams_.empty())
-                        h2self->Region().Reset();
-                    co_return;
-                }();
+                    RunWsHandler(h2self, stream_id, std::move(conn), ws_handler);
                 net::spawn(std::move(ws_task), loop_);
 
                 ok = true;

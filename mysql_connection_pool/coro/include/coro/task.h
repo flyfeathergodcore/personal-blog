@@ -139,22 +139,27 @@ private:
     std::coroutine_handle<promise_type> h_;
 };
 
-// 等待子任务完成：把父协程注册为 continuation，启动子任务
-// 注：task_ 用 const 引用——简报原为 Task<T>&，但 co_await AwaitTask<T>{child_task()}
-// 传入的是临时对象，非 const 左值引用无法绑定右值（编译错误）。
-// const 引用可同时绑定左值/右值；handle()/resume()/promise() 均为 const 可用，
-// 语义与简报一致。
+// 等待子任务完成：把父协程注册为 continuation，启动子任务。
+// 注：AwaitTask 只保存 coroutine_handle（挂起前拷贝），不保存 Task 引用——
+// co_await AwaitTask<void>{send_query_st(...)} 这类表达式把 Task 临时对象传给
+// AwaitTask，临时对象生命周期只到完整表达式结束；若存 const Task<T>&，协程挂起
+// 后引用即悬垂（UB：clang 多数场景会延长临时生命周期，但不保证；GCC 亦有风险，
+// 实测历史在 clang 下崩溃）。Task 析构是 no-op（帧由事件循环管理），拷贝出的
+// handle 在挂起期间始终有效，跨编译器安全。
 template<typename T>
 struct AwaitTask {
-    const Task<T>& task_;
+    using promise_t = typename Task<T>::promise_type;
+    std::coroutine_handle<promise_t> h_;
 
-    bool await_ready() noexcept { return task_.handle().done(); }
+    explicit AwaitTask(const Task<T>& t) : h_(t.handle()) {}
+
+    bool await_ready() noexcept { return h_.done(); }
     void await_suspend(std::coroutine_handle<> parent) {
-        task_.handle().promise().continuation_ = parent;
-        task_.handle().resume();  // 启动子任务（initial_suspend 后首次 resume）
+        h_.promise().continuation_ = parent;
+        h_.resume();  // 启动子任务（initial_suspend 后首次 resume）
     }
     T await_resume() {
-        auto& prom = task_.handle().promise();
+        auto& prom = h_.promise();
         if (prom.exception_) std::rethrow_exception(prom.exception_);
         return std::move(prom.result_);
     }
@@ -164,15 +169,18 @@ struct AwaitTask {
 // await_resume 只重抛异常（若有），其余与主模板一致
 template<>
 struct AwaitTask<void> {
-    const Task<void>& task_;
+    using promise_t = typename Task<void>::promise_type;
+    std::coroutine_handle<promise_t> h_;
 
-    bool await_ready() noexcept { return task_.handle().done(); }
+    explicit AwaitTask(const Task<void>& t) : h_(t.handle()) {}
+
+    bool await_ready() noexcept { return h_.done(); }
     void await_suspend(std::coroutine_handle<> parent) {
-        task_.handle().promise().continuation_ = parent;
-        task_.handle().resume();  // 启动子任务（initial_suspend 后首次 resume）
+        h_.promise().continuation_ = parent;
+        h_.resume();  // 启动子任务（initial_suspend 后首次 resume）
     }
     void await_resume() {
-        auto& prom = task_.handle().promise();
+        auto& prom = h_.promise();
         if (prom.exception_) std::rethrow_exception(prom.exception_);
     }
 };

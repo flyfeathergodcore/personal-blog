@@ -37,6 +37,8 @@ private:
     coro::Task<void> HandlePlain(Worker& w, int wid, net::TcpStream tcp);   // SO_REUSEPORT 已在 open() 内
     coro::Task<void> FlushLoop(int worker_id);
     coro::Task<void> DrainLoop(Worker& w);
+    // 信号等待协程（成员协程而非 lambda，避免闭包悬垂）——clang 兼容
+    coro::Task<void> WatchSignals(net::SignalWatcher& sig);
     std::vector<std::unique_ptr<Worker>> workers_;
     std::shared_ptr<MetricsCollector> metrics_;
     std::function<coro::Task<void>()> persist_cb_;   // 空则不落库

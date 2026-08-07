@@ -81,7 +81,7 @@ cd webcpp-engine && python3 lan-proxy.py 8443 127.0.0.1 9443
 ### 3. 原生编译限制
 
 - **事件循环**：`coro` 协程库只有 epoll（Linux）/ kqueue（macOS）实现，**没有 Windows IOCP**，Windows 不支持原生编译，必须走 Docker / WSL2；
-- **协程 ABI**：后端用 GCC `-fcoroutines` 专用 ABI（MSVC / clang 不兼容），需 GCC 12；
+- **协程 ABI**：协程库基于标准 C++20，**GCC（`-fcoroutines`，12+）与 Clang（标准协程，17+）均可编译**；但必须**整库统一同一编译器**——GCC `-fcoroutines` 的协程帧 ABI 与 clang 的标准协程 ABI 互不混链（混链会在运行时崩溃）。MSVC 仍不兼容（协程 ABI 不同且无 epoll / kqueue）；
 - **系统调用**：依赖 `<sys/epoll.h>` / `<sys/event.h>` 等 POSIX 头文件。
 
 前端 `my-web`（Vue/Vite）完全跨平台，可在任意平台构建。

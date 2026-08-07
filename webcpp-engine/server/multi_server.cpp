@@ -64,27 +64,38 @@ void MultiServer::Start()
 
     // 信号等待协程跑在 worker0 的 loop 上
     {
-        coro::Task<void> s = [this, &sig]() -> coro::Task<void> {
-            while (true) {
-                int sig_no = co_await sig.wait();
-                if (sig_no < 0) continue;
-                Logger::Log(LogLevel::Info, "SERVER",
-                    "收到信号 " + std::to_string(sig_no) + "，开始优雅关闭（最多 " +
-                    std::to_string(kDrainTimeoutSec) + " 秒）");
-                if (shutdown_.exchange(true)) continue;
-                for (auto& w : workers_) w->listener.close();   // 停止新连接
-                for (auto& w : workers_) {
-                    coro::Task<void> d = DrainLoop(*w);
-                    w->loop.post(d.handle());
-                }
-                break;
-            }
-            co_return;
-        }();
+        // 立即调用的 lambda 协程闭包是临时对象，协程挂起（等信号）后闭包销毁
+        // → this/捕获悬垂（GCC 侥幸、clang 必崩）；提为成员协程函数 WatchSignals，
+        // this 指向 MultiServer（Start 存活到 join），sig 按引用传入（同存活）。
+        coro::Task<void> s = WatchSignals(sig);
         workers_[0]->loop.post(s.handle());
     }
     for (auto& w : workers_) w->thread.join();
     Logger::Log(LogLevel::Info, "SERVER", "已完全停止");
+}
+
+// 信号等待协程：挂在 signalfd 上，收到 SIGINT/SIGTERM 触发优雅关闭。
+// 原实现是立即调用的 lambda 协程，闭包临时对象在赋值语句结束后销毁，
+// 协程（while true 长期挂起）恢复时 this/捕获悬垂——GCC 因实现细节恰好
+// 不崩，clang 严格按标准会 use-after-scope 崩溃。成员协程 this 指向
+// MultiServer（Start 存活到 join），sig 按引用进帧（Start 局部变量，同存活）。
+coro::Task<void> MultiServer::WatchSignals(net::SignalWatcher& sig)
+{
+    while (true) {
+        int sig_no = co_await sig.wait();
+        if (sig_no < 0) continue;
+        Logger::Log(LogLevel::Info, "SERVER",
+            "收到信号 " + std::to_string(sig_no) + "，开始优雅关闭（最多 " +
+            std::to_string(kDrainTimeoutSec) + " 秒）");
+        if (shutdown_.exchange(true)) continue;
+        for (auto& w : workers_) w->listener.close();   // 停止新连接
+        for (auto& w : workers_) {
+            coro::Task<void> d = DrainLoop(*w);
+            w->loop.post(d.handle());
+        }
+        break;
+    }
+    co_return;
 }
 
 coro::Task<void> MultiServer::Listen(Worker& w, int wid)

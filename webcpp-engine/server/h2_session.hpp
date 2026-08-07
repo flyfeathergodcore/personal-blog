@@ -119,4 +119,9 @@ private:
 
     // ── Stream handler ──
     coro::Task<void> HandleStream(int32_t stream_id);
+    // WS 处理器协程（原为立即调用 lambda 协程，闭包悬垂 → 提为静态成员，
+    // 参数按值进帧，h2self/conn 为 shared_ptr 拷贝，挂起期间始终存活）
+    static coro::Task<void> RunWsHandler(
+        std::shared_ptr<H2Session> h2self, int32_t stream_id,
+        std::shared_ptr<H2WsConnection> conn, RequestHandler* ws_handler);
 };

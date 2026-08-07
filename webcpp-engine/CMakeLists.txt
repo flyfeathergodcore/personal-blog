@@ -96,13 +96,19 @@ add_executable(net_test test/net_test.cpp net/tcp_stream.cpp
     net/tls_context.cpp net/tls_stream.cpp)
 target_include_directories(net_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(net_test PRIVATE coro OpenSSL::SSL OpenSSL::Crypto)
-target_compile_options(net_test PRIVATE -fcoroutines)
+# GCC 需 -fcoroutines 才启用协程；clang 用标准 C++20 协程，无需且不支持该参数
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+    target_compile_options(net_test PRIVATE -fcoroutines)
+endif()
 
 # ── 日志测试（Logger::Init/Log/StopAll + 级别过滤 + 落盘）──
 add_executable(log_test test/log_test.cpp)
 target_include_directories(log_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(log_test PRIVATE Threads::Threads)
-target_compile_options(log_test PRIVATE -fcoroutines)
+# GCC 需 -fcoroutines 才启用协程；clang 用标准 C++20 协程，无需且不支持该参数
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+    target_compile_options(log_test PRIVATE -fcoroutines)
+endif()
 
 # ── 演示服务器（H1/SSE/WS + TLS，基于 coro net 原语）──
 add_executable(demo_server examples/demo_server.cpp)
@@ -138,13 +144,19 @@ endif()
 add_executable(routes_demo examples/routes_demo.cpp)
 target_include_directories(routes_demo PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(routes_demo PRIVATE webcpp_engine)
-target_compile_options(routes_demo PRIVATE -fcoroutines)
+# GCC 需 -fcoroutines 才启用协程；clang 用标准 C++20 协程，无需且不支持该参数
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+    target_compile_options(routes_demo PRIVATE -fcoroutines)
+endif()
 
 # ── 路由单元测试（query 剥离 / 参数捕获 / lambda 注册）──
 add_executable(router_test test/router_test.cpp)
 target_include_directories(router_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(router_test PRIVATE webcpp_engine)
-target_compile_options(router_test PRIVATE -fcoroutines)
+# GCC 需 -fcoroutines 才启用协程；clang 用标准 C++20 协程，无需且不支持该参数
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+    target_compile_options(router_test PRIVATE -fcoroutines)
+endif()
 
 # 引擎根目录 + include/ 作为 include 根，使消费方可用 #include "net/..." /
 # #include "handler/..." 等相对路径（内置 handler 头文件已迁入 include/）。
