@@ -75,41 +75,9 @@ cd webcpp-engine && python3 lan-proxy.py 8443 127.0.0.1 9443
 # ④ 访问
 #    本机    : http://localhost:8443
 #    局域网   : 后台「工作区设置」开启局域网访问后，同一 WiFi 下的设备访问
-```
 
-> **说明**
-> - **首次部署自动初始化数据库**：`init.sql` 挂载到 mysql 容器，数据卷为空时自动建库建表；
->   已有数据卷不会重跑，**不丢数据**。
-> - 本机已有同名容器（`webcpp-blog` / `mysql1`）时，先 `docker rm -f webcpp-blog mysql1` 再执行。
-> - 局域网 IP：默认前端 WebRTC 实时探测；也可在仓库根 `.env` 写 `HOST_LAN_IP=192.168.x.x`。
-> - `mysql_connection_pool` 与 `coro` 均已包含在本仓库，镜像构建 context 即仓库根。
 
-### 3. 脚本方式（build-run.sh，与 compose 等价）
-
-```bash
-# ① 启动 MySQL 容器，并加入自定义网络（后端按容器名 mysql1 互连）
-docker run -d --name mysql1 -e MYSQL_ROOT_PASSWORD=123456 mysql:8.0
-docker network create blog-net
-docker network connect blog-net mysql1
-
-# ② 初始化数据库
-docker exec -i mysql1 mysql -uroot -p123456 < webcpp-engine/sql/init.sql
-
-# ③ 构建前端
-cd my-web && npm install && npm run build
-
-# ④ 一键构建镜像 + 启动容器 + 启动局域网转发器
-cd webcpp-engine && ./build-run.sh
-
-# ⑤ 访问
-#    本机    : http://localhost:8443
-#    局域网   : 后台「工作区设置」开启局域网访问后，同一 WiFi 下的设备访问
-```
-
-> `build-run.sh` 已跨平台：局域网 IP 自动探测支持 macOS / Linux / WSL2 / Windows（Git Bash），
-> Python 解释器自动探测 `python3` / `python`。
-
-### 4. 原生编译限制
+### 3. 原生编译限制
 
 - **事件循环**：`coro` 协程库只有 epoll（Linux）/ kqueue（macOS）实现，**没有 Windows IOCP**，Windows 不支持原生编译，必须走 Docker / WSL2；
 - **协程 ABI**：后端用 GCC `-fcoroutines` 专用 ABI（MSVC / clang 不兼容），需 GCC 12；
