@@ -80,9 +80,10 @@ cd webcpp-engine && python3 lan-proxy.py 8443 127.0.0.1 9443
 
 ### 3. 原生编译限制
 
-- **事件循环**：`coro` 协程库只有 epoll（Linux）/ kqueue（macOS）实现，**没有 Windows IOCP**，Windows 不支持原生编译，必须走 Docker / WSL2；
+- **统一构建**：仓库根 `CMakeLists.txt` 一键构建整个后端（`cmake -S . -B build && cmake --build build -j4`），Docker 构建亦走此入口；
+- **平台支持**：**Linux 与 macOS 均可原生编译整个后端**——`coro` 事件循环 Linux 用 epoll / macOS 用 kqueue；`webcpp-engine` 的信号监听（signalfd / self-pipe）、热重载（inotify / stat 轮询）、socket 创建（accept4 / fcntl）、文件发送（sendfile / read+write）均有跨平台双实现。**Windows 仍不支持**（无 IOCP 且协程 ABI 不同），必须走 Docker / WSL2；
 - **协程 ABI**：协程库基于标准 C++20，**GCC（`-fcoroutines`，12+）与 Clang（标准协程，17+）均可编译**；但必须**整库统一同一编译器**——GCC `-fcoroutines` 的协程帧 ABI 与 clang 的标准协程 ABI 互不混链（混链会在运行时崩溃）。MSVC 仍不兼容（协程 ABI 不同且无 epoll / kqueue）；
-- **系统调用**：依赖 `<sys/epoll.h>` / `<sys/event.h>` 等 POSIX 头文件。
+- **macOS 原生编译依赖**：`brew install yaml-cpp openssl mysql-client`。
 
 前端 `my-web`（Vue/Vite）完全跨平台，可在任意平台构建。
 
