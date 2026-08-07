@@ -3,7 +3,7 @@
   <div>
     <MenuComponent
       :default-active="activeMenu"
-      :work-items="workItems"
+      :work-items="blogConfigState.workItems"
       @menu-select="handleMenuSelect"
       :menu-background="menuBgColor"
       :menu-text-color="menuTextColor"
@@ -26,8 +26,14 @@
           主题: {{ isDark ? '🌙 夜晚' : '🌞 白天' }}｜顶栏: {{ activeMenu }}｜侧边栏: {{ sidebarActive }}
         </div>
 
-        <!-- 内容区：按侧边栏选中项动态切换对应面板 -->
-        <component :is="activePanel" v-if="activePanel" />
+        <!-- 内容区：按侧边栏选中项动态切换对应面板
+             工作区子栏面板（2-3）是受控组件：绑 modelValue 并监听保存，走全局持久化链 -->
+        <WorkspaceSettings
+          v-if="activePanel === WorkspaceSettings"
+          :model-value="blogConfigState.workItems"
+          @update:model-value="handleWorkItemsUpdate"
+        />
+        <component :is="activePanel" v-else-if="activePanel" />
         <el-empty v-else description="请选择菜单" />
       </div>
     </div>
@@ -37,9 +43,11 @@
 
 <script lang="ts" setup>
 import { ref, computed, type Component } from 'vue'
+import { ElMessage } from 'element-plus'
 import { useRouter } from 'vue-router'
 import { useTheme } from '../composables/useTheme'
 import { loadMenusRaw, toSidebarItems } from '../composables/useSidebarMenus'
+import { blogConfigState, saveWorkItems } from '../composables/useBlogConfig'
 import MenuComponent from '../components/NavigationBar.vue'
 import Sidebar from '../components/Sidebar.vue'
 import Dashboard from '../components/Dashboard.vue'
@@ -82,25 +90,19 @@ const panels: Record<string, Component> = {
 const activePanel = computed<Component | null>(() => panels[sidebarActive.value] || null)
 
 /**
- * 读取工作区子栏数据：从 localStorage 回读（后台「站点设置」可编辑），无数据时返回默认值
- * @returns 工作区子栏配置数组
+ * 工作区子栏保存：数据统一走全局 blogConfigState.workItems（与站点设置同源），
+ * 调 saveWorkItems 持久化——更新全局状态 + 写本地缓存 + 写后端 site_config（所有设备生效）
+ * @param items 编辑后的子栏数组
  */
-const loadWorkItems = (): { label: string; index: string; path: string }[] => {
-  const defaults = [
-    { label: 'item one', index: '4-1', path: '/aichat' },
-    { label: 'item two', index: '4-2', path: '' },
-    { label: 'item three', index: '4-3', path: '' }
-  ]
+const handleWorkItemsUpdate = async (items: { label: string; index: string; path: string }[]) => {
   try {
-    const saved = localStorage.getItem('blogWorkItems')
-    return saved
-      ? (JSON.parse(saved) as { label: string; index: string; path: string }[])
-      : defaults
-  } catch {
-    return defaults
+    await saveWorkItems(items)
+    ElMessage.success('工作区子栏已保存（全局生效）')
+  } catch (e) {
+    const err = e instanceof Error ? e : new Error(String(e))
+    ElMessage.error('保存失败（后端不可达？）：' + err.message)
   }
 }
-const workItems = ref(loadWorkItems())
 
 // 导航栏外观：外观设置面板保存的自定义颜色（未自定义则留空，跟随日夜主题的 CSS 变量）
 const menuBgColor = ref(localStorage.getItem('blogNavBgColor') || '')
@@ -112,7 +114,7 @@ const menuTextColor = ref(localStorage.getItem('blogNavTextColor') || '')
  */
 const handleMenuSelect = (data: { key: string; keyPath: string[] }) => {
   // 工作区子栏点击：跳转到配置的链接（路由跳转 / 外部链接新窗口）
-  const workItem = workItems.value.find((i) => i.index === data.key)
+  const workItem = blogConfigState.workItems.find((i) => i.index === data.key)
   if (workItem) {
     if (workItem.path) {
       if (workItem.path.startsWith('http')) {

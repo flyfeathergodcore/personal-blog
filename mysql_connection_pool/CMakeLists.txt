@@ -23,7 +23,24 @@ if(NOT TARGET coro)
     add_subdirectory(${CORO_DIR} ${CMAKE_BINARY_DIR}/coro)
 endif()
 
-# 查找 MySQL 头文件路径
+# ── MySQL 客户端库检测：优先 mariadb-connector-c（Alpine 等无官方 libmysqlclient 的环境）──
+# mariadb-connector-c 通过 pkg-config(libmariadb) 提供，头文件在 /usr/include/mariadb，
+# Cflags 自带 -I；其异步 API 是 mysql_*_start/cont（后台线程模型），connection.cpp
+# 由 MARIADB_CONNECTOR_C 宏分叉到 mariadb 分支。
+set(MYSQL_IS_MARIADB OFF)
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(MARIADB QUIET libmariadb)
+    if(MARIADB_FOUND)
+        set(MYSQL_INCLUDE_DIR ${MARIADB_INCLUDE_DIRS})
+        set(MYSQL_LIBRARY ${MARIADB_LIBRARIES})
+        set(MYSQL_IS_MARIADB ON)
+        message(STATUS "MySQL 客户端: mariadb-connector-c ${MARIADB_VERSION}")
+    endif()
+endif()
+
+if(NOT MYSQL_IS_MARIADB)
+# 查找 MySQL 头文件路径（libmysqlclient）
 # 约定: 代码中使用 #include <mysql/mysql.h>，所以需要找到 mysql/ 的父目录
 find_path(MYSQL_INCLUDE_DIR
     NAMES mysql/mysql.h
@@ -60,12 +77,24 @@ find_library(MYSQL_LIBRARY
         /usr/local/lib
 )
 
-if(NOT EXISTS ${MYSQL_INCLUDE_DIR} OR NOT EXISTS ${MYSQL_LIBRARY})
+endif()
+
+# 检查：mariadb 分支的 MYSQL_LIBRARY 是 pkg-config 链接名（如 mariadb）而非文件路径，
+# 故仅校验 include 目录；libmysqlclient 分支的 find_library 返回完整路径，可校验两者
+if(NOT EXISTS ${MYSQL_INCLUDE_DIR})
+    message(FATAL_ERROR
+        "\n========================================\n"
+        "MySQL client include directory not found!\n"
+        "Expected:\n"
+        "  Include: ${MYSQL_INCLUDE_DIR}\n"
+        "========================================\n"
+    )
+endif()
+if(NOT MYSQL_IS_MARIADB AND NOT EXISTS ${MYSQL_LIBRARY})
     message(FATAL_ERROR
         "\n========================================\n"
         "MySQL client library not found!\n"
         "Expected:\n"
-        "  Include: ${MYSQL_INCLUDE_DIR}\n"
         "  Library: ${MYSQL_LIBRARY}\n"
         "========================================\n"
     )
@@ -100,3 +129,8 @@ target_include_directories(mysql_connection_pool
 # 帧分配走 FramePool、IO 等待走 EventLoop，必须链接 coro（同时获得其 PUBLIC include 路径）
 target_link_libraries(mysql_connection_pool PRIVATE coro ${MYSQL_LIBRARY})
 target_include_directories(mysql_connection_pool PRIVATE ${MYSQL_INCLUDE_DIR})
+if(MYSQL_IS_MARIADB)
+    # MARIADB_ASYNC 必须在 #include <mysql/mysql.h> 前生效（编译宏级），使
+    # mysql_*_start/cont 声明可见；MARIADB_CONNECTOR_C 触发 connection.cpp 分叉
+    target_compile_definitions(mysql_connection_pool PUBLIC MARIADB_CONNECTOR_C MARIADB_ASYNC)
+endif()

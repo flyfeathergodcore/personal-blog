@@ -3,6 +3,7 @@
 #include "protocol/session_region.hpp"
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <string_view>
 
 class H1Parser : public Context {
@@ -21,6 +22,13 @@ public:
     /// （state_ 停在 HEADERS/BODY），Feed 只对 DONE/ERROR 态自复位，
     /// 其余状态必须显式复位，否则新连接的首个请求会被旧状态机误解析。
     void Reset();
+
+    // 设置对端 IP（连接建立时由会话层 getpeername 注入，连接级不变）
+    // 参数：ip - IPv4 点分十进制字符串
+    void SetPeerIp(std::string_view ip) { peer_ip_ = ip; }
+    // 获取对端 IP（未注入返回空）
+    // 参数：无
+    std::string_view PeerIp() const override { return peer_ip_; }
 
     // 获取请求方法（如 GET/POST）
     // 参数：无
@@ -93,6 +101,9 @@ private:
 
     bool h2_detected_ = false;
     bool message_complete_ = false;
+
+    // 对端 IP（IPv4 点分十进制），连接建立时注入，连接级不变
+    std::string peer_ip_;
 
     size_t consumed_ = 0;   // 最近一次 Feed 消费的字节数
 

@@ -196,6 +196,9 @@ int main(int argc, char** argv)
     // ── Router ──
     auto file_cache = std::make_unique<FileCache>();
     file_cache->LoadDirectory(cfg.doc_root);
+    // 启动后台缓存刷新：前端 dist 更新后无需重启容器，最多一个扫描周期
+    // （默认 5 秒）即生效。mtime/大小变化、新增、删除都会被检测到。
+    file_cache->StartRefresher(5);
 
     Router router;
     router.Add("/", std::make_unique<StaticFileHandler>(file_cache.get()));
@@ -227,11 +230,14 @@ int main(int argc, char** argv)
     auto metrics = std::make_shared<MetricsCollector>(cfg.threads);
     router.Add("/metrics.json", std::make_unique<MetricsHandler>(metrics.get()));
 
-    // ── Middleware（洋葱模型：CORS / RequestId / Logging / Metrics）──
+    // ── Middleware（洋葱模型：CORS / LanGuard / VisitorTrack / RequestId / Logging / Metrics）──
     MiddlewareManager middleware;
     middleware.Add(std::make_unique<CORSMiddleware>());
     // 局域网访问拦截：关闭时拒绝局域网 IP Host 的请求（localhost 放行）
     middleware.Add(std::make_unique<LanGuardMiddleware>());
+    // 访问者在线追踪：每请求刷新对端 IP 的最近活跃时间（在 LanGuard 之后，
+    // 被 403 拦截的局域网请求不计数）
+    middleware.Add(std::make_unique<VisitorTrackMiddleware>());
     middleware.Add(std::make_unique<RequestIdMiddleware>());
     middleware.Add(std::make_unique<LoggingMiddleware>());
     middleware.Add(std::make_unique<MetricsMiddleware>(metrics.get()));

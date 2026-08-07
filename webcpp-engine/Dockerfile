@@ -52,7 +52,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends -o Acquire::Ret
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY --from=build /src/build/demo_server /app/demo_server
+COPY --from=build /src/build/webcpp-engine/demo_server /app/demo_server
 # 前端静态产物（宿主机 npm run build 产出），由网关 doc_root=/app/www 直接 serve，
 # 浏览器同源访问 :8443，/api 无需代理
 COPY my-web/dist/ /app/www/

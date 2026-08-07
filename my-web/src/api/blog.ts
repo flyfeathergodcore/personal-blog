@@ -369,22 +369,19 @@ export const setLanEnabled = async (enabled: boolean): Promise<LanStatus> => {
   return http.post<LanStatus>('/network/lan', { enabled })
 }
 
-// ── 访问者 IP 统计（仪表盘展示；数据来自宿主机转发器 lan-proxy 上报真实对端 IP） ──
+// ── 访问者 IP 统计（仪表盘展示；后端自追踪当前在线 IP，离线不显示） ──
 export interface VisitorInfo {
   ip: string
-  cnt: number
-  firstSeen: string
   lastSeen: string
-  online: boolean
 }
 export interface VisitorResult {
   onlineCount: number
   visitors: VisitorInfo[]
 }
 /**
- * 获取访问者 IP 统计（仪表盘展示）
- * @param limit 返回访客条数上限，默认 20
- * @returns 在线数与访客列表
+ * 获取当前在线访问者 IP（后端内存自追踪：最近 120s 内有请求的地址）
+ * @param limit 保留参数，兼容后端接口签名
+ * @returns 在线数与在线 IP 列表
  */
 export const getVisitors = async (limit = 20): Promise<VisitorResult> => {
   if (USE_MOCK) return { onlineCount: 0, visitors: [] }

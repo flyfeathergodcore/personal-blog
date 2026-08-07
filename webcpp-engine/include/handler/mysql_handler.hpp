@@ -48,6 +48,17 @@ public:
     Response HandlePre(Context& ctx) override;
 };
 
+// 访问者在线追踪中间件：每个请求 Pre 阶段用 ctx.PeerIp() 刷新该 IP 的最近活跃
+// 时间（在线判定依据）。注册到 MiddlewareManager 的 PreRequest 阶段。
+class VisitorTrackMiddleware : public Middleware {
+public:
+    // 返回中间件阶段：PreRequest
+    Type GetType() const override { return Type::PreRequest; }
+    // 刷新请求方 IP 的活跃时间；放行请求
+    // 参数：ctx - 请求上下文（含对端 IP）
+    Response HandlePre(Context& ctx) override;
+};
+
 class MetricsCollector;
 namespace coro { template <typename T> class Task; }
 

@@ -15,6 +15,9 @@
 #ifdef __linux__
 #include <sys/sendfile.h>
 #endif
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 // 计算自给定时间点至今经过的微秒数（用于指标耗时统计）
@@ -24,6 +27,23 @@ static uint64_t dur_us(std::chrono::steady_clock::time_point start)
     return static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now() - start).count());
+}
+
+// 从连接流取对端 IPv4 字符串（getpeername）；失败返回空
+// 参数：stream - 连接流（TcpStream / TlsStream 均提供 fd()）
+// 返回：IPv4 点分十进制，未知返回空
+template<typename Stream>
+static std::string GetPeerIp(const Stream& stream)
+{
+    struct sockaddr_in peer;
+    socklen_t len = sizeof(peer);
+    if (getpeername(stream.fd(),
+                    reinterpret_cast<struct sockaddr*>(&peer), &len) != 0)
+        return "";
+    char ip[INET_ADDRSTRLEN] = {0};
+    if (!inet_ntop(AF_INET, &peer.sin_addr, ip, sizeof(ip)))
+        return "";
+    return ip;
 }
 
 // 构造函数：保存连接流与路由/中间件引用，按需初始化请求区域池
@@ -51,6 +71,9 @@ coro::Task<void> H11Session<Stream>::Start()
     if (metrics_) metrics_->OnConnectionOpen(worker_id_);
 
     try {
+    // 注入对端 IP（连接级不变，供访问者在线统计等按来源 IP 聚合）
+    parser_.SetPeerIp(GetPeerIp(stream_));
+
     for (;;)
     {
         // ── 区域复位时机 ──

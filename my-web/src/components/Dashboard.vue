@@ -29,7 +29,7 @@
       <div ref="trendEl" class="chart"></div>
     </div>
 
-    <!-- 访问者 IP：最近访问者 + 当前在线（宿主机转发器上报真实 IP） -->
+    <!-- 访问者 IP：当前在线 IP（后端自追踪，最近 120s 内有请求才显示，离线即消失） -->
     <div class="chart-box">
       <div class="chart-head">
         <h4>访问者 IP</h4>
@@ -39,18 +39,10 @@
         :data="visitorList"
         size="small"
         v-loading="visitorLoading"
-        empty-text="暂无访问记录（外部经 lan-proxy 转发器访问后产生）"
+        empty-text="当前无在线 IP（最近 120s 内有请求的设备才会出现在这里）"
       >
         <el-table-column prop="ip" label="IP 地址" min-width="150" />
-        <el-table-column prop="cnt" label="累计访问" width="90" />
-        <el-table-column prop="lastSeen" label="最近访问" min-width="160" />
-        <el-table-column label="状态" width="80">
-          <template #default="{ row }">
-            <el-tag :type="row.online ? 'success' : 'info'" size="small">
-              {{ row.online ? '在线' : '离线' }}
-            </el-tag>
-          </template>
-        </el-table-column>
+        <el-table-column prop="lastSeen" label="最近活跃" min-width="160" />
       </el-table>
     </div>
   </div>
@@ -92,13 +84,13 @@ let realtimeTimer = 0
 let trendTimer = 0
 let visitorTimer = 0
 
-// 访问者 IP：最近访问者列表 + 当前在线 IP 数（5s 轮询）
+// 访问者 IP：当前在线 IP 列表 + 在线数（5s 轮询）
 const visitorList = ref<VisitorInfo[]>([])
 const visitorOnlineCount = ref(0)
 const visitorLoading = ref(false)
 
 /**
- * 拉取访问者列表与当前在线 IP 数（5s 轮询）；接口异常静默，保留上次数据
+ * 拉取当前在线访问者 IP（5s 轮询）；接口异常静默，保留上次数据
  */
 const loadVisitors = async (): Promise<void> => {
   visitorLoading.value = true

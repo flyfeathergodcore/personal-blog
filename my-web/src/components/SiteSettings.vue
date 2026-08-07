@@ -49,10 +49,6 @@
       </el-table-column>
     </el-table>
 
-    <!-- 工作区设置：顶部导航「⋯」下拉子栏（复用现有组件，保存后前台导航刷新生效） -->
-    <el-divider content-position="left">工作区设置</el-divider>
-    <WorkspaceSettings v-model="workItems" @update:model-value="handleWorkItemsChange" />
-
     <!-- 从资源库选择背景图：展示已上传的图片资源（type==='image'），点选写入背景 -->
     <el-dialog v-model="imagePickerVisible" title="从资源库选择背景图" width="640px">
       <div class="bg-picker-grid">
@@ -83,15 +79,9 @@
 <script lang="ts" setup>
 import { reactive, ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import {
-  blogConfigState,
-  saveBlogConfig,
-  initBlogConfig,
-  getWorkItems
-} from '../composables/useBlogConfig'
+import { blogConfigState, saveBlogConfig, initBlogConfig } from '../composables/useBlogConfig'
 import { getResources, saveSiteConfig } from '../api/blog'
-import type { Resource, BlogConfig } from '../api/blog'
-import WorkspaceSettings from './WorkspaceSettings.vue'
+import type { Resource, BlogConfig, SiteConfig } from '../api/blog'
 
 // 本地编辑副本：基于全局配置当前值（后端 → store → 表单），点「保存设置」才提交
 const form = reactive<BlogConfig>({
@@ -101,8 +91,6 @@ const form = reactive<BlogConfig>({
   background: blogConfigState.background,
   navMenus: blogConfigState.navMenus.map((m) => ({ ...m }))
 })
-// 工作区子栏：从全局 store 读（后端为事实源，非本机 localStorage 独享）
-const workItems = ref(getWorkItems().map((w) => ({ ...w })))
 
 /**
  * 生命周期：挂载时拉取后端最新全局配置并同步进编辑表单（其他设备改过的配置可见）
@@ -116,7 +104,6 @@ onMounted(async () => {
     background: blogConfigState.background,
     navMenus: blogConfigState.navMenus.map((m) => ({ ...m }))
   })
-  workItems.value = getWorkItems().map((w) => ({ ...w }))
 })
 
 // 从资源库选择背景图：弹窗可见性 + 图片资源列表
@@ -146,15 +133,6 @@ const pickImage = (img: Resource) => {
   form.background = '/api/img/' + img.id
   imagePickerVisible.value = false
   ElMessage.success('已选择背景图，点「保存设置」生效')
-}
-
-/**
- * 工作区子栏变更：即时同步全局 store 与本地缓存（后端在「保存设置」时一并提交）
- * @param items 最新子栏列表
- */
-const handleWorkItemsChange = (items: { label: string; index: string; path: string }[]) => {
-  blogConfigState.workItems = items.map((w) => ({ ...w }))
-  localStorage.setItem('blogWorkItems', JSON.stringify(items))
 }
 
 // 新增菜单项输入
@@ -191,10 +169,11 @@ const removeMenu = (index: number) => {
  * + 写后端 blog_config（所有设备全局生效）
  */
 const save = async () => {
-  const config = {
+  // 工作区子栏不再在本面板编辑：沿用全局 store 当前值（保留前端导航「⋯」下拉功能）
+  const config: SiteConfig = {
     ...form,
     navMenus: form.navMenus.map((m) => ({ ...m })),
-    workItems: workItems.value.map((w) => ({ ...w }))
+    workItems: blogConfigState.workItems.map((w) => ({ ...w }))
   }
   saveBlogConfig(config)
   Object.assign(blogConfigState, config)

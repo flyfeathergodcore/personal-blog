@@ -1,5 +1,6 @@
 #pragma once
 #include "protocol/session_region.hpp"
+#include "cache/file_cache.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -75,6 +76,12 @@ public:
     void BodyFile(int fd, size_t file_size,
                   size_t range_offset = 0, size_t range_len = 0);
 
+    // 绑定缓存项所有权（ownership pin）：后台 FileCache 刷新替换缓存项后，
+    // 本响应仍持有 shared_ptr，使 fd / content 在响应发送完成前不会被回收，
+    // 避免“旧文件被替换 → fd 关闭 → 正在发送的响应读到已关闭 fd”的竞态。
+    // 参数：f - 来自 FileCache::Get 的缓存项快照
+    void OwnFile(std::shared_ptr<const CachedFile> f) { owned_file_ = std::move(f); }
+
     // ── Queries ──
     // 判断响应是否为空（未绑定区域池且非原始模式）
     // 参数：无
@@ -138,6 +145,9 @@ private:
 
     const char* ext_body_ = nullptr;
     size_t ext_body_len_  = 0;
+    // 缓存项所有权 pin：见 OwnFile 注释。仅提升引用计数，不参与发送逻辑，
+    // 生命周期由析构顺序保证（在 fd_ 使用之后才释放 owned_file_）。
+    std::shared_ptr<const CachedFile> owned_file_;
     int fd_ = -1;
     size_t file_size_ = 0;
     size_t file_range_offset_ = 0;

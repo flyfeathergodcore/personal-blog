@@ -84,22 +84,27 @@ const saveSessions = () => {
   }
 }
 
+// 窄屏（<900px）时固定侧栏隐藏，用抽屉展示会话列表；选中后自动关闭
+const drawerOpen = ref(false)
+
 /**
- * 新建一个会话并置为当前激活会话
+ * 新建一个会话并置为当前激活会话（窄屏时关闭抽屉）
  */
 const newSession = () => {
   const s = createSession()
   sessions.value.unshift(s)
   activeId.value = s.id
+  drawerOpen.value = false
   saveSessions()
 }
 
 /**
- * 切换当前激活的历史会话
+ * 切换当前激活的历史会话（窄屏时关闭抽屉）
  * @param id 目标会话 id
  */
 const selectSession = (id: string) => {
   activeId.value = id
+  drawerOpen.value = false
 }
 
 // ===== 消息发送 =====
@@ -258,6 +263,8 @@ watch(activeId, () => scrollToBottom())
         <!-- 右侧：聊天区 -->
         <section class="chat-body">
           <div class="chat-header">
+            <!-- 窄屏按钮：打开会话列表抽屉（宽屏隐藏） -->
+            <el-button class="mobile-session-btn" size="small" @click="drawerOpen = true">会话</el-button>
             <span class="chat-header-title">{{ activeSession?.title || '新会话' }}</span>
           </div>
 
@@ -307,13 +314,35 @@ watch(activeId, () => scrollToBottom())
         </section>
       </div>
     </main>
+
+    <!-- 窄屏会话抽屉：固定侧栏隐藏时承载历史会话列表 -->
+    <el-drawer v-model="drawerOpen" title="历史会话" size="280px" class="session-drawer">
+      <div class="drawer-actions">
+        <el-button type="primary" style="width: 100%" @click="newSession">+ 新会话</el-button>
+      </div>
+      <div class="session-list">
+        <div
+          v-for="s in sessions"
+          :key="s.id"
+          class="session-item"
+          :class="{ active: s.id === activeId }"
+          @click="selectSession(s.id)"
+        >
+          <div class="session-title">{{ s.title || '新会话' }}</div>
+          <div class="session-time">{{ formatTime(s.updatedAt) }}</div>
+        </div>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
 <style scoped>
-/* 页面骨架：顶部导航吸顶，聊天区占满剩余高度 */
+/* 页面骨架：顶部导航吸顶，聊天区占满剩余高度。
+   高度用 100dvh（动态视口）替代 100vh：移动端地址栏伸缩时布局跟随，不溢出；
+   不支持 dvh 的旧浏览器回退到 100vh。 */
 .chat-page {
   height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
 }
@@ -409,11 +438,30 @@ watch(activeId, () => scrollToBottom())
 }
 
 .chat-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 12px 16px;
   border-bottom: 1px solid var(--blog-border);
   font-size: 14px;
   font-weight: 600;
   color: var(--blog-text);
+}
+
+.chat-header-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 窄屏「会话」按钮：宽屏隐藏，媒体查询中恢复显示 */
+.mobile-session-btn {
+  display: none;
+}
+
+/* 窄屏抽屉内顶部操作区 */
+.drawer-actions {
+  margin-bottom: 8px;
 }
 
 .message-list {
@@ -517,5 +565,53 @@ watch(activeId, () => scrollToBottom())
 
 .chat-input-row .el-textarea {
   flex: 1;
+}
+
+/* ══════ 响应式：窄屏/小窗口适配 ══════ */
+@media (max-width: 900px) {
+  /* 收窄页面外边距，给聊天区让出更多宽度 */
+  .chat-main {
+    padding: 8px 12px;
+  }
+
+  /* 固定侧栏隐藏，会话列表改由抽屉承载 */
+  .chat-sidebar {
+    display: none;
+  }
+
+  /* 显示标题栏「会话」按钮 */
+  .mobile-session-btn {
+    display: inline-flex;
+  }
+
+  /* 窄屏下消息气泡加宽，充分利用屏幕 */
+  .message-bubble {
+    max-width: 90%;
+  }
+
+  /* 输入区按钮缩小，避免拥挤 */
+  .chat-input-row .el-button {
+    padding: 8px 14px;
+  }
+}
+
+/* 超窄屏（手机竖屏）：进一步压缩内边距 */
+@media (max-width: 480px) {
+  .chat-main {
+    padding: 6px 8px;
+  }
+
+  .chat-input-area {
+    padding: 8px;
+  }
+
+  .chat-toolbar .el-button {
+    font-size: 12px;
+  }
+
+  /* 图片在窄屏全宽展示 */
+  .message-image {
+    max-width: 100%;
+  }
 }
 </style>

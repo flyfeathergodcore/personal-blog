@@ -27,11 +27,21 @@
 #include "connectionpool.h"
 #include <mysql/mysql.h>
 
+#include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <net/if.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <map>
 #include <memory>
@@ -45,23 +55,159 @@
 //
 //   - g_lan_enabled：默认关闭（更安全）。关闭时 LanGuardMiddleware 拒绝
 //     局域网 IP Host 的请求（本机 localhost 放行），设备访问看到 403。
-//   - g_lan_ip：宿主机局域网 IP，由 build-run.sh 注入环境变量 HOST_LAN_IP。
+//   - 局域网 IP：后端实时探测（LanIp() 每次调用重新探测，换网后自动更新）。
+//     DetectLanIp() 四级兜底链适配全部部署形态——环境变量 HOST_LAN_IP 显式注入、
+//     挂载文件 LAN_IP_FILE（宿主机守护进程实时写入，见 webcpp-engine/lan-ip.sh）、
+//     --network host 下 UDP 默认路由接口直接命中宿主机网卡、getifaddrs 物理接口兜底。
 //   - 开关状态落库 site_config 表（CREATE TABLE IF NOT EXISTS），容器重建后保持。
 // ═══════════════════════════════════════════════════════════════════
 static std::atomic<bool> g_lan_enabled{false};
-static std::string g_lan_ip;
+
+// 判断 IPv4 是否为 RFC1918 私网地址（局域网内可直连）
+// 参数：b - 4 字节网络字节序地址；返回 true 表示 10/8、172.16/12、192.168/16
+static bool IsPrivateIp(const unsigned char* b) {
+    return (b[0] == 10) ||
+           (b[0] == 172 && b[1] >= 16 && b[1] <= 31) ||
+           (b[0] == 192 && b[1] == 168);
+}
+
+// 从挂载文件读取宿主机注入的局域网 IP。
+// 背景：Docker bridge 网络下容器看不到宿主机网卡，由宿主机守护进程把探测到的
+// IP 写入共享卷（如 /var/run/lan-ip），每次请求实时读——换网后宿主机更新文件、
+// 后端下次请求自动拿到新 IP，无需重启容器。与宿主机的配合见 webcpp-engine/lan-ip.sh。
+// 返回：文件中的合法 IPv4 字符串；文件缺失/内容非法返回空串
+static std::string ReadLanIpFile() {
+    // 挂载文件路径：默认 /var/run/lan-ip（Docker -v 挂载），可用环境变量 LAN_IP_FILE 覆盖
+    const char* env = std::getenv("LAN_IP_FILE");
+    const char* path = (env && *env) ? env : "/var/run/lan-ip";
+    FILE* f = fopen(path, "r");
+    if (!f) return "";
+    char buf[64] = {0};
+    const bool ok = fgets(buf, static_cast<int>(sizeof(buf)), f) != nullptr;
+    fclose(f);
+    if (!ok) return "";
+    // 去首尾空白（换行/空格）
+    std::string ip(buf);
+    const auto not_space = [](unsigned char c) { return !std::isspace(c); };
+    const auto first = std::find_if(ip.begin(), ip.end(), not_space);
+    const auto last = std::find_if(ip.rbegin(), ip.rend(), not_space).base();
+    if (first >= last) return "";
+    ip = std::string(first, last);
+    // 校验必须是合法 IPv4（防脏数据）
+    struct in_addr a;
+    if (inet_pton(AF_INET, ip.c_str(), &a) != 1) return "";
+    return ip;
+}
+
+// 嗅探本机局域网 IPv4 地址（每次调用实时重探，网络切换后自动返回新 IP）。
+// 四级兜底链，适配全部部署形态（每级失败自动落到下一级）：
+//   ① HOST_LAN_IP 环境变量 —— 手动/编排显式注入，最高优先；
+//   ② 挂载文件 LAN_IP_FILE —— 宿主机守护进程实时写入（bridge 网络下容器看不到
+//      宿主机网卡，靠它拿到宿主机局域网 IP；Docker -v 挂载，见 lan-ip.sh）；
+//   ③ 默认路由接口 UDP 探测 —— --network host（容器直用宿主机网卡）或原生跑时
+//      connect 到外部地址（不实际发包，仅做路由查找）再 getsockname 取本机源 IP，
+//      精确返回其他设备访问本机的地址，避开 getifaddrs 遍历顺序拿到 Docker
+//      虚拟接口（feth*/veth*/docker0 等）的干扰地址；
+//   ④ getifaddrs 遍历 —— 跳过回环与虚拟接口，在物理接口中取 RFC1918 私网地址。
+// 返回：局域网 IP；各级均失败返回空串。
+static std::string DetectLanIp() {
+    // ① 环境变量手动覆盖优先（容器部署时由编排注入最可靠）
+    const char* env = std::getenv("HOST_LAN_IP");
+    if (env && *env) return env;
+
+    // ② 挂载文件（宿主机守护进程实时更新，见 lan-ip.sh）
+    const std::string from_file = ReadLanIpFile();
+    if (!from_file.empty()) return from_file;
+
+    // ③ 默认路由接口（跨平台：macOS / Linux 均可靠）
+    {
+        const int fd = socket(AF_INET, SOCK_DGRAM, 0);
+        if (fd >= 0) {
+            struct sockaddr_in dst = {};
+            dst.sin_family = AF_INET;
+            dst.sin_port = htons(80);
+            if (inet_pton(AF_INET, "8.8.8.8", &dst.sin_addr) == 1 &&
+                connect(fd, reinterpret_cast<struct sockaddr*>(&dst), sizeof(dst)) == 0) {
+                struct sockaddr_in src = {};
+                socklen_t len = sizeof(src);
+                if (getsockname(fd, reinterpret_cast<struct sockaddr*>(&src), &len) == 0) {
+                    char ip[INET_ADDRSTRLEN] = {0};
+                    const unsigned char* b =
+                        reinterpret_cast<const unsigned char*>(&src.sin_addr);
+                    // 默认路由接口可能拿到的就是公网/私网地址：局域网场景下
+                    // 私网地址即为内网可达 IP；非私网（公网）也能被访问，一并返回
+                    if (!(b[0] == 0) && inet_ntop(AF_INET, &src.sin_addr, ip, sizeof(ip))) {
+                        close(fd);
+                        return ip;
+                    }
+                }
+            }
+            close(fd);
+        }
+    }
+
+    // 方法二（兜底）：遍历接口，跳过回环与虚拟/隧道接口（docker/feth/veth/br/
+    // tun/tap/utun/vmnet 等），在物理接口中取 RFC1918 私网地址
+    struct ifaddrs* ifa = nullptr;
+    if (getifaddrs(&ifa) != 0) return "";
+    std::string result;
+    for (struct ifaddrs* it = ifa; it; it = it->ifa_next) {
+        if (!it->ifa_addr || it->ifa_addr->sa_family != AF_INET) continue;
+        if (it->ifa_flags & IFF_LOOPBACK) continue;
+        const std::string name = it->ifa_name ? it->ifa_name : "";
+        if (name == "docker0" || name.rfind("feth", 0) == 0 ||
+            name.rfind("veth", 0) == 0 || name.rfind("br-", 0) == 0 ||
+            name.rfind("tun", 0) == 0 || name.rfind("tap", 0) == 0 ||
+            name.rfind("utun", 0) == 0 || name.rfind("vmnet", 0) == 0 ||
+            name.rfind("lo", 0) == 0 || name.rfind("virbr", 0) == 0)
+            continue;
+
+        auto* sin = reinterpret_cast<struct sockaddr_in*>(it->ifa_addr);
+        const unsigned char* b =
+            reinterpret_cast<const unsigned char*>(&sin->sin_addr);
+        if (IsPrivateIp(b)) {
+            char ip[INET_ADDRSTRLEN] = {0};
+            if (inet_ntop(AF_INET, &sin->sin_addr, ip, sizeof(ip))) {
+                result = ip;
+                break;
+            }
+        }
+    }
+    freeifaddrs(ifa);
+    return result;
+}
 
 // ═══════════════════════════════════════════════════════════════════
-// 访问者统计（宿主机转发器 lan-proxy.py 上报连接方真实 IP）
+// 访问者在线统计（只记录当前在线 IP，离线不显示）
 //
-//   转发器在宿主机监听 0.0.0.0:8443（对外统一入口），每个连接取真实对端
-//   IP（本机 127.0.0.1 / 局域网 192.168.x.x），连接建立/断开时 POST
-//   /api/network/visitor 上报；这里用内存维护「当前在线」状态，
-//   累计访问次数与最近访问时间落库 visitor_stats 表。
+//   后端直接自追踪，不再依赖宿主机转发器（lan-proxy 已废弃）：
+//   - 引擎层会话在连接建立时经 getpeername 注入对端 IP（Context::PeerIp()）；
+//   - VisitorTrackMiddleware 在每个请求 Pre 阶段刷新该 IP 的最近活跃时间；
+//   - GET /api/network/visitor 只返回最近 kOnlineWindow 秒内有请求的 IP
+//     （当前在线），离线与历史访问次数一律不记录、不显示。
 // ═══════════════════════════════════════════════════════════════════
-// 当前在线连接数（IP → 活动连接数，连接建立 +1、断开 -1）
+// 当前在线访问者（IP → 最近活跃时间，steady_clock 单调时钟），过期条目懒清理
 static std::mutex g_visitor_mutex;
-static std::map<std::string, int> g_active_visitors;
+static std::map<std::string, std::chrono::steady_clock::time_point> g_active_visitors;
+// 在线判定窗口：超过该时长无任何请求视为离线
+static constexpr std::chrono::seconds kOnlineWindow{120};
+
+// 记录访问者活跃：刷新 IP 的最近请求时间（当前在线判定依据）。
+// 由 VisitorTrackMiddleware 在每个请求 Pre 阶段调用；空 IP 忽略。
+// 顺带懒清理超过在线窗口的过期条目，防止 map 无限增长。
+// 参数：ip - 请求方 IPv4
+static void RecordActiveVisitor(std::string_view ip) {
+    if (ip.empty()) return;
+    std::lock_guard<std::mutex> lk(g_visitor_mutex);
+    const auto now = std::chrono::steady_clock::now();
+    for (auto it = g_active_visitors.begin(); it != g_active_visitors.end();) {
+        if (now - it->second > kOnlineWindow)
+            it = g_active_visitors.erase(it);
+        else
+            ++it;
+    }
+    g_active_visitors[std::string(ip)] = now;
+}
 
 namespace {
 
@@ -1554,7 +1700,7 @@ public:
         }
         std::string resp_body = "{\"enabled\":" +
             std::string(g_lan_enabled.load() ? "true" : "false") +
-            ",\"lanIp\":" + JsonStr(g_lan_ip) + "}";
+            ",\"lanIp\":" + JsonStr(LanIp()) + "}";
         co_return JsonResponse(pool, 200, resp_body);
     }
 };
@@ -1622,119 +1768,50 @@ public:
 
 // ── 访问者统计 ──
 
-// 上报请求是否来自本机（转发器连 127.0.0.1:9443 上报，Host=127.0.0.1:9443；
-// 外部设备经转发器的 Host 是局域网 IP，拒绝，防止伪造灌库）
-// 参数：host - 请求的 Host 头；返回 true 表示来自本机（127.0.0.1/localhost）
-bool IsLocalHost(std::string_view host) {
-    if (host.empty()) return false;
-    return host.find("127.0.0.1") != std::string_view::npos ||
-           host.find("localhost") != std::string_view::npos;
-}
-
-// 返回当前在线的 IP 数量（线程安全）
-int ActiveVisitorCount() {
-    std::lock_guard<std::mutex> lk(g_visitor_mutex);
-    return static_cast<int>(g_active_visitors.size());
-}
-// 判断指定 IP 是否在线（存在未断开的活动连接，线程安全）
-// 参数：ip - 待查询的客户端 IP
-bool IsOnline(const std::string& ip) {
-    std::lock_guard<std::mutex> lk(g_visitor_mutex);
-    auto it = g_active_visitors.find(ip);
-    return it != g_active_visitors.end() && it->second > 0;
-}
-
-// GET/POST /api/network/visitor
-//   POST {ip, action:"connect"|"disconnect"}（仅本机转发器上报）
-//     connect    → 在线 +1，UPSERT visitor_stats（cnt+1, last_seen=NOW）
-//     disconnect → 在线 -1
-//   GET ?limit=20 → {onlineCount, visitors:[{ip,cnt,firstSeen,lastSeen,online}]}
+// GET /api/network/visitor → {onlineCount, visitors:[{ip,lastSeen}]}
+// 只返回当前在线 IP：最近 kOnlineWindow 秒内有请求的地址（离线与历史一律不显示）。
+// 在线状态由 VisitorTrackMiddleware 在每个请求 Pre 阶段刷新，无需落库、不依赖转发器。
 class VisitorHandler : public MysqlHandlerBase {
 public:
     using MysqlHandlerBase::MysqlHandlerBase;
-    // 处理访问者统计上报/查询：POST 仅本机转发器可上报连接/断开，GET 返回最近访问者列表
-    // 参数：ctx - HTTP 请求上下文（含 Body/Query/Header）
+    // 处理访问者查询：返回当前在线 IP 列表与在线数
+    // 参数：ctx - HTTP 请求上下文
     coro::Task<Response> HandleAsync(const Context& ctx) override {
         auto* pool = ctx.Pool();
         if (!pool) co_return Response::Raw(500, "no pool");
 
-        if (ctx.Method() == "POST") {
-            if (!IsLocalHost(ctx.Header("host")))
-                co_return JsonResponse(pool, 403, R"({"message":"拒绝上报"})");
-            const std::string body(ctx.Body());
-            const std::string ip = JsonField(body, "ip");
-            const std::string action = JsonField(body, "action");
-            if (ip.empty())
-                co_return JsonResponse(pool, 400, R"({"message":"缺少 ip"})");
-
-            if (action == "connect") {
-                {
-                    std::lock_guard<std::mutex> lk(g_visitor_mutex);
-                    g_active_visitors[ip] += 1;
+        std::string body;
+        {
+            std::lock_guard<std::mutex> lk(g_visitor_mutex);
+            const auto now = std::chrono::steady_clock::now();
+            std::string list;
+            int count = 0;
+            for (auto it = g_active_visitors.begin(); it != g_active_visitors.end();) {
+                // 过期条目懒清理
+                if (now - it->second > kOnlineWindow) {
+                    it = g_active_visitors.erase(it);
+                    continue;
                 }
-                // 落库累计访问（UPSERT 幂等：cnt+1，last_seen 刷新；首访记 first_seen）
-                ConnGuard g(GetPool(cfg_));
-                if (co_await g.borrow()) {
-                    std::string sql =
-                        "INSERT INTO visitor_stats(ip,cnt,first_seen,last_seen) "
-                        "VALUES('" + SqlEscape(g.get()->raw(), ip) + "',1,NOW(),NOW()) "
-                        "ON DUPLICATE KEY UPDATE cnt=cnt+1, last_seen=NOW()";
-                    try {
-                        (void)co_await coro::AwaitTask<uint64_t>{
-                            g.get()->async_update(sql.c_str(), 5000)};
-                    } catch (...) {
-                        // 落库失败不影响在线状态
-                    }
-                }
-            } else if (action == "disconnect") {
-                std::lock_guard<std::mutex> lk(g_visitor_mutex);
-                auto it = g_active_visitors.find(ip);
-                if (it != g_active_visitors.end()) {
-                    if (--(it->second) <= 0) g_active_visitors.erase(it);
-                }
+                // lastSeen 换算为可读本地时间（system_clock 由单调时钟偏移量反推；
+                // steady 为纳秒精度、system 为微秒，需显式 duration_cast 无损转换）
+                const auto sys_now = std::chrono::system_clock::now();
+                const auto age = std::chrono::duration_cast<
+                    std::chrono::system_clock::duration>(now - it->second);
+                const auto last = sys_now - age;
+                std::time_t t = std::chrono::system_clock::to_time_t(last);
+                char buf[32] = {0};
+                struct std::tm tm_val;
+                localtime_r(&t, &tm_val);
+                std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tm_val);
+                if (count > 0) list += ",";
+                list += "{\"ip\":" + JsonStr(it->first) +
+                        ",\"lastSeen\":" + JsonStr(buf) + "}";
+                ++count;
+                ++it;
             }
-            co_return JsonResponse(pool, 200, R"({"ok":true})");
+            body = "{\"onlineCount\":" + std::to_string(count) +
+                   ",\"visitors\":[" + list + "]}";
         }
-
-        // GET：最近访问者（按最近访问倒序）+ 在线标记
-        const std::string limit_str = std::string(ctx.Query("limit"));
-        int limit = 20;
-        if (!limit_str.empty()) limit = std::atoi(limit_str.c_str());
-        if (limit <= 0) limit = 20;
-        if (limit > 200) limit = 200;
-
-        ConnGuard g(GetPool(cfg_));
-        if (!co_await g.borrow())
-            co_return JsonResponse(pool, 500, R"({"message":"数据库连接失败"})");
-        std::string sql = "SELECT ip,cnt,first_seen,last_seen FROM visitor_stats "
-                          "ORDER BY last_seen DESC LIMIT " + std::to_string(limit);
-        MYSQL_RES* res = nullptr;
-        try {
-            res = co_await coro::AwaitTask<MYSQL_RES*>{
-                g.get()->async_query(sql.c_str(), 5000)};
-        } catch (const std::exception& e) {
-            co_return JsonResponse(pool, 500,
-                "{\"message\":" + JsonStr(e.what()) + "}");
-        }
-
-        std::string body = "{\"onlineCount\":" +
-            std::to_string(ActiveVisitorCount()) + ",\"visitors\":[";
-        bool first = true;
-        if (res) {
-            MYSQL_ROW row;
-            while ((row = mysql_fetch_row(res))) {
-                if (!first) body += ",";
-                first = false;
-                const std::string ip = row[0] ? row[0] : "";
-                body += "{\"ip\":" + JsonStr(ip) +
-                        ",\"cnt\":" + (row[1] ? row[1] : "0") +
-                        ",\"firstSeen\":" + JsonStr(row[2] ? row[2] : "") +
-                        ",\"lastSeen\":" + JsonStr(row[3] ? row[3] : "") +
-                        ",\"online\":" + (IsOnline(ip) ? "true" : "false") + "}";
-            }
-            mysql_free_result(res);
-        }
-        body += "]}";
         co_return JsonResponse(pool, 200, body);
     }
 };
@@ -1762,18 +1839,24 @@ Response LanGuardMiddleware::HandlePre(Context& ctx) {
     return Response::Raw(403, raw);
 }
 
+// 访问者在线追踪：每个请求 Pre 阶段刷新该 IP 的最近活跃时间（在线判定依据）。
+// 与 LanGuard 同阶段，LanGuard 注册在前、先执行；被 403 拦截的请求不会刷活跃。
+// 参数：ctx - HTTP 请求上下文（含对端 IP）
+Response VisitorTrackMiddleware::HandlePre(Context& ctx) {
+    RecordActiveVisitor(ctx.PeerIp());
+    return Response::None();
+}
+
 // 返回局域网访问开关当前状态（线程安全）
 bool IsLanEnabled() { return g_lan_enabled.load(); }
-// 返回宿主机局域网 IP（来自环境变量 HOST_LAN_IP）
-std::string LanIp() { return g_lan_ip; }
+// 返回宿主机局域网 IP：每次调用实时嗅探（换网后自动返回新 IP），
+// 未嗅探到时返回空串
+std::string LanIp() { return DetectLanIp(); }
 
 // 启动时（main 线程，同步 MySQL）读 site_config 初始化开关状态；
-// 表/行不存在时保持默认（关闭）。g_lan_ip 来自环境变量 HOST_LAN_IP。
+// 表/行不存在时保持默认（关闭）。局域网 IP 由 LanIp() 实时嗅探，无需预置。
 // 参数：cfg - MySQL 连接配置
 void InitLanStateFromDb(const MysqlConfig& cfg) {
-    const char* env = std::getenv("HOST_LAN_IP");
-    g_lan_ip = env ? env : "";
-
     MYSQL* conn = mysql_init(nullptr);
     if (!conn) return;
     if (!mysql_real_connect(conn, cfg.host.c_str(), cfg.user.c_str(),
@@ -1782,7 +1865,7 @@ void InitLanStateFromDb(const MysqlConfig& cfg) {
         mysql_close(conn);
         return;
     }
-    // 建表幂等（init.sql 不可重跑，site_config / visitor_stats 靠这里创建）
+    // 建表幂等（init.sql 不可重跑，site_config / blog_config 靠这里创建）
     mysql_query(conn,
         "CREATE TABLE IF NOT EXISTS site_config ("
         "`key` VARCHAR(64) PRIMARY KEY,"
@@ -1796,16 +1879,7 @@ void InitLanStateFromDb(const MysqlConfig& cfg) {
         "`key` VARCHAR(64) PRIMARY KEY,"
         "`value` MEDIUMTEXT"
         ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-    // 访问者统计：ip 唯一，cnt 累计连接次数，first/last_seen 首次/最近访问
-    mysql_query(conn,
-        "CREATE TABLE IF NOT EXISTS visitor_stats ("
-        "id INT AUTO_INCREMENT PRIMARY KEY,"
-        "ip VARCHAR(45) NOT NULL,"
-        "cnt INT NOT NULL DEFAULT 0,"
-        "first_seen DATETIME,"
-        "last_seen DATETIME,"
-        "UNIQUE KEY uk_ip (ip)"
-        ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    // 访问者在线不落库：由 VisitorTrackMiddleware 内存自追踪，无需建表
     if (mysql_query(conn, "SELECT `value` FROM site_config WHERE `key`='lan_enabled'") == 0) {
         MYSQL_RES* res = mysql_store_result(conn);
         if (res) {
@@ -1829,7 +1903,6 @@ void RegisterBlogRoutes(Router& router, const MysqlConfig& cfg) {
     router.Get   ("/api/network/lan",   std::make_unique<LanStatusHandler>(cfg));
     router.Post  ("/api/network/lan",   std::make_unique<LanStatusHandler>(cfg));
     router.Get   ("/api/network/visitor", std::make_unique<VisitorHandler>(cfg));
-    router.Post  ("/api/network/visitor", std::make_unique<VisitorHandler>(cfg));
     router.Get   ("/api/site-config",   std::make_unique<SiteConfigHandler>(cfg));
     router.Post  ("/api/site-config",   std::make_unique<SiteConfigHandler>(cfg));
     router.Post  ("/api/login",         std::make_unique<LoginHandler>(cfg));

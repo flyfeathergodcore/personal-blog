@@ -56,7 +56,7 @@ Response StaticFileHandler::Handle(const Context& ctx)
         return Response::Error(403, *pool);
     }
 
-    auto* file = cache_->Get(norm_path);
+    auto file = cache_->Get(norm_path);
     if (!file) {
         // ── Autoindex: if path maps to a directory, generate listing ──
         std::string dir_virt;  // virtual path for HTML display
@@ -85,6 +85,38 @@ Response StaticFileHandler::Handle(const Context& ctx)
 
         if (fs::is_directory(dir_on_disk)) {
             return GenerateDirectoryListing(dir_on_disk, *pool, dir_virt);
+        }
+
+        // ── SPA fallback：Vue history 路由（如 /aichat 这类无扩展名路径）在
+        // 静态目录没有对应文件时，回退到 /index.html 交给前端路由接管渲染，
+        // 直接刷新子路由页面不再 404。
+        // 仅对「无文件扩展名」的路径生效：/assets/*.js、/favicon.ico 等真实
+        // 资源缺失时仍 404，避免把 HTML 当资源返回（会破坏 JS/CSS 加载）。
+        auto last_seg = norm_path.substr(norm_path.find_last_of('/') + 1);
+        if (last_seg.find('.') == std::string::npos) {
+            if (auto idx = cache_->Get("/index.html")) {
+                if (!idx->content.empty()) {
+                    Response resp(200, *pool);
+                    resp.OwnFile(idx);
+                    resp.Header("Content-Type", idx->mime);
+                    resp.Header("Content-Length", idx->content.size());
+                    resp.Header("Cache-Control", "no-cache");
+                    resp.EndHeaders();
+                    resp.Body(idx->content);
+                    return resp;
+                }
+                if (idx->fd >= 0) {
+                    Response resp(200, *pool);
+                    resp.OwnFile(idx);
+                    resp.Header("Content-Type", idx->mime);
+                    resp.Header("Content-Length",
+                               static_cast<uint64_t>(idx->file_size));
+                    resp.Header("Cache-Control", "no-cache");
+                    resp.EndHeaders();
+                    resp.BodyFile(idx->fd, idx->file_size);
+                    return resp;
+                }
+            }
         }
         return Response::Error(404, *pool);
     }
@@ -175,6 +207,7 @@ Response StaticFileHandler::Handle(const Context& ctx)
 
                 if (!file->content.empty()) {
                     Response resp(206, *pool);
+                    resp.OwnFile(file);
                     fillCommonHeaders(resp, range_len, file->mtime, fsize);
                     resp.Header("Content-Range", std::string_view(cr_buf,
                                    static_cast<size_t>(cr_len)));
@@ -184,6 +217,7 @@ Response StaticFileHandler::Handle(const Context& ctx)
                 }
                 if (file->fd >= 0) {
                     Response resp(206, *pool);
+                    resp.OwnFile(file);
                     fillCommonHeaders(resp, range_len, file->mtime, fsize);
                     resp.Header("Content-Range", std::string_view(cr_buf,
                                    static_cast<size_t>(cr_len)));
@@ -200,6 +234,7 @@ Response StaticFileHandler::Handle(const Context& ctx)
     // In-memory content → gather-write (faster for SSL)
     if (!file->content.empty()) {
         Response resp(200, *pool);
+        resp.OwnFile(file);
         fillCommonHeaders(resp, file->content.size(), file->mtime, file->content.size());
         resp.EndHeaders();
         resp.Body(file->content);
@@ -209,6 +244,7 @@ Response StaticFileHandler::Handle(const Context& ctx)
     // Large file: use sendfile path
     if (file->fd >= 0) {
         Response resp(200, *pool);
+        resp.OwnFile(file);
         fillCommonHeaders(resp, file->file_size, file->mtime, file->file_size);
         resp.EndHeaders();
         resp.BodyFile(file->fd, file->file_size);

@@ -101,3 +101,20 @@ export const initBlogConfig = async (): Promise<void> => {
  * @returns 工作区子栏配置数组
  */
 export const getWorkItems = () => blogConfigState.workItems
+
+/**
+ * 保存工作区子栏：更新全局状态 + 写本地缓存 + 写后端 site_config（所有设备全局生效）。
+ * 供工作区编辑（HomeView 面板 2-3）调用，与 SiteSettings 共用同一持久化链。
+ * @param items 编辑后的子栏数组（元素会被拷贝，不引用调用方可变对象）
+ */
+export const saveWorkItems = async (
+  items: { label: string; index: string; path: string }[]
+): Promise<void> => {
+  const list = items.map((i) => ({ ...i }))
+  // 更新全局响应式状态：顶栏「⋯」下拉、其他设备读取立即同步
+  blogConfigState.workItems = list
+  // 写本地缓存（首屏渲染 + 后端不可达兜底）
+  saveBlogConfig(blogConfigState)
+  // 写后端（最终事实源）；失败抛异常由调用方提示
+  await saveSiteConfig({ ...blogConfigState })
+}

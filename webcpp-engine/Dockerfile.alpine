@@ -1,0 +1,64 @@
+# ═══════════════════════════════════════════════════════════════════
+# webcpp-engine 博客镜像 — Alpine 变体（mariadb-connector-c）
+#
+# 与 Dockerfile（Ubuntu + libmysqlclient）功能等价，镜像更轻量：
+#   - build 阶段用 alpine:3.20 + g++（Alpine 3.18+ 默认 gcc 12/13，支持
+#     C++20 协程 -fcoroutines）+ yaml-cpp/openssl/mariadb-connector-c-dev；
+#   - 连接池在 mariadb 分支下用 mysql_*_start/cont 异步 API（ucontext 协程
+#     事件驱动模型，与 libmysqlclient 的 *_nonblocking 等价、无后台线程），
+#     由 CMake pkg-config 检测 libmariadb 自动启用，无需额外开关；
+#   - 前端静态产物（my-web/dist）在宿主机 npm run build 产出后 COPY 进镜像。
+#
+# ⚠️ 平台限制：必须 --platform=linux/amd64。mariadb-connector-c 的 nonblock
+# 依赖 x86_64 汇编协程后端；aarch64/musl 无该后端也无可用 ucontext 实现，
+# 编译为 MY_CONTEXT_DISABLE → mysql_options(MYSQL_OPT_NONBLOCK) 失败 →
+# *_start 会因 async_context 为 NULL 段错误。amd64 下已验证可用。
+#
+# 构建上下文 = 本仓库根目录（同 Dockerfile）
+#   构建：docker build --platform=linux/amd64 -f webcpp-engine/Dockerfile.alpine \
+#         -t webcpp-blog-alpine .
+# ═══════════════════════════════════════════════════════════════════
+
+# ── 阶段 1：C++ 后端 ──
+FROM --platform=linux/amd64 alpine:3.20 AS build
+# g++：协程 ABI 必须全工程统一同一编译器——构建容器固定用 GCC（-fcoroutines）。
+# mariadb-connector-c-dev：提供 mysql.h（位于 /usr/include/mariadb）+ start/cont 异步 API
+RUN apk add --no-cache \
+        build-base g++ cmake make pkgconf \
+        yaml-cpp-dev openssl-dev mariadb-connector-c-dev
+
+WORKDIR /src
+# coro 协程库统一使用 vue-web/coro（连接池、引擎共用同一份，避免 coro
+# EventLoop TLS 双实例）；顶层 CMakeLists 统一编排整体构建
+COPY CMakeLists.txt /src/CMakeLists.txt
+COPY mysql_connection_pool/ /src/mysql_connection_pool/
+COPY coro/ /src/coro/
+COPY webcpp-engine/ /src/webcpp-engine/
+RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build build -j$(nproc) --target demo_server
+
+# ── 阶段 2：运行镜像 ──
+FROM --platform=linux/amd64 alpine:3.20
+# 运行期动态依赖：yaml-cpp / openssl / mariadb-connector-c / libstdc++
+RUN apk add --no-cache yaml-cpp openssl mariadb-connector-c libstdc++
+
+WORKDIR /app
+COPY --from=build /src/build/webcpp-engine/demo_server /app/demo_server
+# 前端静态产物（宿主机 npm run build 产出），由网关 doc_root=/app/www 直接 serve
+COPY my-web/dist/ /app/www/
+COPY webcpp-engine/config/blog.yaml /app/config.yaml
+EXPOSE 8443
+CMD ["./demo_server", "-c", "/app/config.yaml"]
+
+# ── 运行方式（局域网 IP 由 DetectLanIp() 四级兜底链提供，见 mysql_handler.cpp）──
+#   方式一（Linux 推荐，零改动）：--network host，容器直用宿主机网卡，
+#     兜底链第③级 UDP 嗅探直接命中宿主机局域网 IP：
+#       docker run --network host webcpp-blog-alpine
+#   方式二（macOS/Windows/Linux 通用）：宿主机跑 webcpp-engine/lan-ip.sh -w
+#     常驻写文件，容器 bind-mount 进来（兜底链第②级，换网实时更新）：
+#       ./lan-ip.sh -w /run/lan-ip &
+#       docker run -p 8443:8443 -v /run/lan-ip:/var/run/lan-ip webcpp-blog-alpine
+#   方式三（最简单，换网需重启容器）：启动时注入一次：
+#       docker run -p 8443:8443 -e HOST_LAN_IP=$(./lan-ip.sh) webcpp-blog-alpine
+#   ⚠️ bridge 网络下容器内看不到宿主机网卡，方式二/三必须其一，否则拿到的是
+#      容器 eth0 的 172.17.x.x。

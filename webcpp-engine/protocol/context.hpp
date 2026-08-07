@@ -44,6 +44,12 @@ public:
     // 参数：无
     virtual bool IsHttp2() const { return false; }
 
+    // 对端 IP（IPv4 点分十进制字符串视图）。由会话层在连接建立时经
+    // getpeername 注入（见 H1Parser::SetPeerIp）；未知或未实现返回空。
+    // 用途：访问者在线统计等按来源 IP 聚合的场景。
+    // 参数：无
+    virtual std::string_view PeerIp() const { return {}; }
+
     // 获取请求级内存池（Session 在 Feed 前设置）
     // 参数：无
     SessionRegion* Pool() const { return pool_; }

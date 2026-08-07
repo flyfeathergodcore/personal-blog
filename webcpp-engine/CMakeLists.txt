@@ -130,10 +130,29 @@ endif()
 #   独立构建 → 传 -DMYSQL_POOL_DIR=... 把连接池源码直接编入 demo_server。
 # mysqlclient 提供 MySQL 8.0+ 非阻塞 API；coro 须与引擎共用同一份，避免
 # EventLoop TLS 双实例。
-set(MYSQL_POOL_DIR "" CACHE PATH "mysql_connection_pool 源码目录")
-if(TARGET mysql_connection_pool)
+# ── MySQL 客户端库检测：优先 mariadb-connector-c（Alpine 等无官方 libmysqlclient）──
+# 与 mysql_connection_pool/CMakeLists.txt 同一策略：pkg-config 找到 libmariadb 则用
+# mariadb（MYSQL_IS_MARIADB=ON），否则 fallback 官方 libmysqlclient。链接 target
+# 时宏由 mysql_connection_pool 的 PUBLIC 定义传递；源码编入（MYSQL_POOL_DIR）模式
+# 需在本块显式补 MARIADB_CONNECTOR_C/MARIADB_ASYNC（后者须在 #include <mysql/mysql.h>
+# 前生效，使 mysql_*_start/cont 声明可见）。
+set(MYSQL_IS_MARIADB OFF)
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(MARIADB QUIET libmariadb)
+    if(MARIADB_FOUND)
+        set(MYSQL_INCLUDE_DIR ${MARIADB_INCLUDE_DIRS})
+        set(MYSQL_LIBRARY ${MARIADB_LIBRARIES})
+        set(MYSQL_IS_MARIADB ON)
+    endif()
+endif()
+if(NOT MYSQL_IS_MARIADB)
     find_path(MYSQL_INCLUDE_DIR NAMES mysql/mysql.h)
     find_library(MYSQL_LIBRARY NAMES mysqlclient libmysqlclient)
+endif()
+
+set(MYSQL_POOL_DIR "" CACHE PATH "mysql_connection_pool 源码目录")
+if(TARGET mysql_connection_pool)
     if(MYSQL_INCLUDE_DIR AND MYSQL_LIBRARY)
         target_sources(demo_server PRIVATE src/handler/mysql_handler.cpp)
         target_include_directories(demo_server PRIVATE ${MYSQL_INCLUDE_DIR})
@@ -143,8 +162,6 @@ if(TARGET mysql_connection_pool)
         message(WARNING "未找到 MySQL client 库，博客接口将不可用")
     endif()
 elseif(MYSQL_POOL_DIR)
-    find_path(MYSQL_INCLUDE_DIR NAMES mysql/mysql.h)
-    find_library(MYSQL_LIBRARY NAMES mysqlclient libmysqlclient)
     if(MYSQL_INCLUDE_DIR AND MYSQL_LIBRARY)
         target_sources(demo_server PRIVATE
             src/handler/mysql_handler.cpp
@@ -153,6 +170,9 @@ elseif(MYSQL_POOL_DIR)
         target_include_directories(demo_server PRIVATE
             ${MYSQL_POOL_DIR}/include ${MYSQL_POOL_DIR}/src ${MYSQL_INCLUDE_DIR})
         target_link_libraries(demo_server PRIVATE ${MYSQL_LIBRARY})
+        if(MYSQL_IS_MARIADB)
+            target_compile_definitions(demo_server PRIVATE MARIADB_CONNECTOR_C MARIADB_ASYNC)
+        endif()
         message(STATUS "MySQL 博客接口已启用 (MYSQL_POOL_DIR=${MYSQL_POOL_DIR})")
     else()
         message(WARNING "未找到 MySQL client 库，博客接口将不可用")
