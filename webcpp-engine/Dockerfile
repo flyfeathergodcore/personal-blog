@@ -10,7 +10,7 @@
 #   Ubuntu 的 libmysqlclient-dev 提供该 API；alpine 只有 mariadb-connector-c 不支持。
 #
 # 构建上下文 = /Users/Zhuanz1/Documents/github
-#   （含 mysql_connection_pool 源码 + vue-web/webcpp-engine 源码 + my-web）
+#   （含 vue-web 仓库整体：mysql_connection_pool + vue-web/webcpp-engine + my-web）
 #   构建：cd my-web && npm run build && docker build ...
 # ═══════════════════════════════════════════════════════════════════
 
@@ -29,7 +29,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends -o Acquire::Ret
 WORKDIR /src
 # coro 协程库用 vue-web/coro（含 operator co_await，Task 可直接 co_await；
 # 连接池 mysql_connection_pool 用同一份 coro 静态链接，避免 coro TLS 双实例）
-COPY mysql_connection_pool/ /src/mysql_connection_pool/
+COPY vue-web/mysql_connection_pool/ /src/mysql_connection_pool/
 COPY vue-web/coro/ /src/coro/
 COPY vue-web/webcpp-engine/ /src/webcpp-engine/
 # 关闭在镜像内跑 git 相关的问题：直接 cmake 配置 + 构建 demo_server

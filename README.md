@@ -25,22 +25,23 @@
 
 ```
 .
-├── my-web/               # Vue 3 前端
-│   ├── src/              # 组件 / 页面 / 路由 / API / 组合式函数
-│   ├── public/           # 静态资源（favicon 等）
-│   ├── package.json      # 前端依赖（npm）
+├── my-web/                # Vue 3 前端
+│   ├── src/               # 组件 / 页面 / 路由 / API / 组合式函数
+│   ├── public/            # 静态资源（favicon 等）
+│   ├── package.json       # 前端依赖（npm）
 │   └── vite.config.ts
-├── webcpp-engine/        # C++ 后端服务器
-│   ├── src/              # 博客业务 handler（文章 / 分类 / 资源 / 站点配置 / LAN 等）
-│   ├── net/              # TCP / TLS / 缓冲读写
-│   ├── protocol/         # HTTP/1.1、HTTP/2、WebSocket
-│   ├── server/           # 会话 / 连接池 / 多路复用
-│   ├── router/           # 路由注册
-│   ├── sql/              # 数据库初始化脚本（init.sql）
-│   ├── config/           # 服务配置（blog.yaml）
-│   ├── Dockerfile        # 两阶段构建镜像
-│   └── build-run.sh      # 一键构建 + 部署脚本
-└── coro/                 # 自研 C++20 协程库（epoll / kqueue 事件循环）
+├── webcpp-engine/         # C++ 后端服务器
+│   ├── src/               # 博客业务 handler（文章 / 分类 / 资源 / 站点配置 / LAN 等）
+│   ├── net/               # TCP / TLS / 缓冲读写
+│   ├── protocol/          # HTTP/1.1、HTTP/2、WebSocket
+│   ├── server/            # 会话 / 连接池 / 多路复用
+│   ├── router/            # 路由注册
+│   ├── sql/               # 数据库初始化脚本（init.sql）
+│   ├── config/            # 服务配置（blog.yaml）
+│   ├── Dockerfile         # 两阶段构建镜像
+│   └── build-run.sh       # 一键构建 + 部署脚本
+├── mysql_connection_pool/ # MySQL 异步连接池（C++ 协程，含内部 coro 副本）
+└── coro/                  # 自研 C++20 协程库（epoll / kqueue 事件循环）
 ```
 
 ## 🚀 构建与运行
@@ -59,8 +60,9 @@ cd webcpp-engine && ./build-run.sh
 #    局域网   : 后台「工作区设置」开启局域网访问后，手机 / 平板等同一 WiFi 设备访问
 ```
 
-> 说明：镜像构建 context 需要包含 `mysql_connection_pool`（后端连接池依赖的独立源码库），
-> 见 `webcpp-engine/Dockerfile` 注释。
+> 说明：`mysql_connection_pool`（MySQL 异步连接池）与 `coro`（协程库）均已包含在本仓库中。
+> 镜像构建 context 需为仓库的**上级目录**（Dockerfile 的 COPY 路径为 `vue-web/...`），见
+> `webcpp-engine/Dockerfile` 注释。
 
 ## 📊 性能参考
 

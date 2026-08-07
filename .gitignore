@@ -8,5 +8,8 @@
 # 协程库构建产物（coro/build）
 coro/build/
 
+# 连接池构建产物（mysql_connection_pool/build）
+mysql_connection_pool/build/
+
 # superpowers 会话计划文档（本地临时生成）
 docs/
