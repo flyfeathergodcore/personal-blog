@@ -68,8 +68,8 @@ cd webcpp-engine && ./build-run.sh
 
 > **结论**：Windows 上可正常部署，但有两条硬性约束——
 > ① 后端**只支持 Docker 容器 / WSL2（Linux 内核）方式运行**，不支持原生编译（见文末说明）；
-> ② `build-run.sh` 是 bash 脚本，且局域网 IP 探测用了 **macOS 专用命令**（`route get default` / `ipconfig getifaddr`），
-> 在 Windows / Linux 上需用 Git Bash 或 WSL2 执行，并按下方说明处理 IP 探测。
+> ② `build-run.sh` 是 bash 脚本，需用 **Git Bash 或 WSL2** 执行（局域网 IP 探测已跨平台支持
+> macOS / Linux / Windows）。
 
 ### 方式一：Docker Desktop + Git Bash（推荐）
 
@@ -94,11 +94,11 @@ cd webcpp-engine && ./build-run.sh
    ```
 6. 访问 **http://localhost:8443**，局域网设备访问后台「工作区设置」开启后显示的局域网地址。
 
-> **局域网 IP 探测说明**：`build-run.sh` 里的 IP 探测命令仅 macOS 可用，在 Windows 上会探测失败
-> （不影响部署，开启局域网开关后前端会通过 WebRTC 实时探测本机局域网 IP）。若想让脚本正确
-> 注入 IP，可在 WSL2 里用 Linux 命令替代：
+> **局域网 IP 探测**：`build-run.sh` 已跨平台自动探测本机局域网 IP（macOS 用默认路由网卡、
+> Linux/WSL2 用 iproute2、Windows 用 PowerShell/ipconfig），通常无需手动设置。若自动探测不到
+> （如多网卡取错），可手动指定后执行：
 > ```bash
-> export HOST_LAN_IP="$(hostname -I | awk '{print $1}')"   # WSL2 / Linux 获取局域网 IP
+> export HOST_LAN_IP="192.168.x.x"      # 手动指定本机局域网 IP
 > cd webcpp-engine && ./build-run.sh
 > ```
 
