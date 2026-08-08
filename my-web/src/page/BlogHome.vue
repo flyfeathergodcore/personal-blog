@@ -53,4 +53,11 @@ const handleSearch = (kw: string) => {
   margin: 0 auto;
   padding: 0 24px;
 }
+
+/* ══════ 响应式：≤768px 移动端 ══════ */
+@media (max-width: 768px) {
+  .home-main {
+    padding: 0 12px;
+  }
+}
 </style>

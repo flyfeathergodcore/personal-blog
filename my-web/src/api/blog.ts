@@ -407,3 +407,48 @@ export const saveSiteConfig = async (config: SiteConfig): Promise<void> => {
   if (USE_MOCK) return
   await http.post<void>('/site-config', config)
 }
+
+// ── 指标参数配置（后台「站点设置 → 指标与统计」；后端 /api/metrics-config，
+//    存 site_config 热生效，重启回落 config.yaml metrics: 段默认值） ──
+// 注意：字段与后端 config.hpp MetricsConfig / metrics.hpp RuntimeMetricsConfig
+// 保持一致（三处同步，改一处须同改另两处）。
+export interface MetricsConfig {
+  flush_interval_ms: number // QPS 刷新周期（Flush 间隔，100–1000ms）
+  persist_interval_secs: number // 统计落库周期（10–3600s）
+  cleanup_interval_secs: number // 过期统计清理周期（300–86400s）
+  cleanup_retention_days: number // 清理保留窗口（7–3650 天）
+  realtime_refresh_ms: number // 仪表盘实时轮询（1000–60000ms）
+  trend_refresh_ms: number // 仪表盘趋势图轮询（5000–3600000ms）
+  visitor_refresh_ms: number // 仪表盘访问者表轮询（1000–60000ms）
+}
+/**
+ * 获取当前指标参数（后端返回 clamp 后的运行时值；后端不可达时前端用默认值兜底）
+ * @returns 指标参数配置
+ */
+export const getMetricsConfig = async (): Promise<MetricsConfig> => {
+  if (USE_MOCK) {
+    return {
+      flush_interval_ms: 1000, persist_interval_secs: 60,
+      cleanup_interval_secs: 3600, cleanup_retention_days: 30,
+      realtime_refresh_ms: 3000, trend_refresh_ms: 60000,
+      visitor_refresh_ms: 5000,
+    }
+  }
+  return http.get<MetricsConfig>('/metrics-config')
+}
+/**
+ * 保存指标参数（后端逐字段 clamp + 热应用 + 落库，返回 clamp 后的完整配置）
+ * @param config 指标参数（支持部分字段，缺失回落当前运行时值）
+ * @returns 后端 clamp 后的完整配置
+ */
+export const saveMetricsConfig = async (config: Partial<MetricsConfig>): Promise<MetricsConfig> => {
+  if (USE_MOCK) {
+    return {
+      flush_interval_ms: 1000, persist_interval_secs: 60,
+      cleanup_interval_secs: 3600, cleanup_retention_days: 30,
+      realtime_refresh_ms: 3000, trend_refresh_ms: 60000,
+      visitor_refresh_ms: 5000,
+    }
+  }
+  return http.post<MetricsConfig>('/metrics-config', config)
+}

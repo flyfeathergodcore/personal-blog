@@ -82,8 +82,13 @@
       </div>
     </div>
 
-    <!-- 上传图片对话框 -->
-    <el-dialog v-model="uploadVisible" title="上传背景图" width="420px">
+    <!-- 上传图片对话框：移动端全屏 -->
+    <el-dialog
+      v-model="uploadVisible"
+      title="上传背景图"
+      :width="isMobile ? '100%' : '420px'"
+      :fullscreen="isMobile"
+    >
       <el-upload
         drag
         :show-file-list="false"
@@ -100,8 +105,13 @@
       </el-upload>
     </el-dialog>
 
-    <!-- 从资源库选择图片对话框（真实资源库：GET /api/resources，仅图片） -->
-    <el-dialog v-model="pickerVisible" title="从资源库选择" width="600px">
+    <!-- 从资源库选择图片对话框（真实资源库：GET /api/resources，仅图片）；移动端全屏 -->
+    <el-dialog
+      v-model="pickerVisible"
+      title="从资源库选择"
+      :width="isMobile ? '100%' : '600px'"
+      :fullscreen="isMobile"
+    >
       <div class="server-images">
         <div
           v-for="img in serverImages"
@@ -132,6 +142,10 @@ import { ref, computed } from 'vue'
 import { ElMessage, type UploadRequestOptions } from 'element-plus'
 import { getResources } from '../api/blog'
 import type { Resource } from '../api/blog'
+import { useViewport } from '../composables/useViewport'
+
+// 视口断点：移动端弹窗全屏
+const { isMobile } = useViewport()
 
 // 组件属性：初始背景色（后续后台设置时可直接传入已保存的配置值）
 const props = defineProps({
@@ -426,5 +440,22 @@ const handleSave = () => {
   margin-top: 12px;
   padding-top: 12px;
   border-top: 1px dashed var(--el-border-color);
+}
+
+/* 移动端：设置行改为 label 在上、控件在下，避免 100px 固定 label 挤压 */
+@media (max-width: 768px) {
+  .setting-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .img-url-input {
+    width: 100%;
+  }
+
+  .server-images {
+    grid-template-columns: repeat(2, 1fr);
+  }
 }
 </style>

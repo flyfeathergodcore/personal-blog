@@ -210,4 +210,29 @@ const reset = () => {
 .save-row {
   margin-top: 16px;
 }
+
+/* 移动端：分组/子项行允许换行，避免输入框与按钮在窄屏横向溢出 */
+@media (max-width: 768px) {
+  .group-row,
+  .child-row {
+    flex-wrap: wrap;
+  }
+
+  .g-label,
+  .c-label {
+    flex: 1 1 100%;
+    max-width: 100%;
+    margin-left: 0;
+  }
+
+  .g-index,
+  .c-index {
+    width: 90px;
+  }
+
+  .g-icon,
+  .c-icon {
+    width: 120px;
+  }
+}
 </style>

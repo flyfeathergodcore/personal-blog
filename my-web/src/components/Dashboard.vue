@@ -35,15 +35,18 @@
         <h4>访问者 IP</h4>
         <span class="visitor-online">🟢 当前在线 <b>{{ visitorOnlineCount }}</b> 个 IP</span>
       </div>
-      <el-table
-        :data="visitorList"
-        size="small"
-        v-loading="visitorLoading"
-        empty-text="当前无在线 IP（最近 120s 内有请求的设备才会出现在这里）"
-      >
-        <el-table-column prop="ip" label="IP 地址" min-width="150" />
-        <el-table-column prop="lastSeen" label="最近活跃" min-width="160" />
-      </el-table>
+      <!-- 表格横向滚动容器：窄屏下 IP 列不溢出 -->
+      <div class="table-scroll">
+        <el-table
+          :data="visitorList"
+          size="small"
+          v-loading="visitorLoading"
+          empty-text="当前无在线 IP（最近 120s 内有请求的设备才会出现在这里）"
+        >
+          <el-table-column prop="ip" label="IP 地址" min-width="150" />
+          <el-table-column prop="lastSeen" label="最近活跃" min-width="160" />
+        </el-table>
+      </div>
     </div>
   </div>
 </template>
@@ -52,6 +55,7 @@
 import { onMounted, onBeforeUnmount, ref, type Ref } from 'vue'
 import * as echarts from 'echarts'
 import { getStats, type StatsResult, getVisitors, type VisitorInfo } from '../api/blog'
+import { loadMetricsConfig, metricsConfigState } from '../composables/useMetricsConfig'
 
 // 实时数据源 /metrics.json 的结构（只取用到字段）
 interface MetricsJson {
@@ -205,12 +209,15 @@ const resize = (): void => {
 /**
  * 生命周期：初始化图表并启动实时/历史/访问者三类轮询定时器
  */
-onMounted(() => {
+onMounted(async () => {
   realtimeChart = echarts.init(realtimeEl.value as HTMLDivElement)
   trendChart = echarts.init(trendEl.value as HTMLDivElement)
 
+  // 先拉取指标参数（轮询周期 / 后端热配置），失败静默用默认值兜底
+  await loadMetricsConfig()
+
   /**
-   * 实时轮询：立即拉一次 + 每 3s 刷新（失败静默，卡片保持「—」）
+   * 实时轮询：立即拉一次 + 每 realtime_refresh_ms 刷新（失败静默，卡片保持「—」）
    */
   const pollRealtime = async (): Promise<void> => {
     try {
@@ -221,15 +228,18 @@ onMounted(() => {
     }
   }
   void pollRealtime()
-  realtimeTimer = window.setInterval(() => void pollRealtime(), 3000)
+  realtimeTimer = window.setInterval(
+    () => void pollRealtime(), metricsConfigState.realtime_refresh_ms)
 
-  // 历史趋势：立即拉一次 + 每 60s 刷新
+  // 历史趋势：立即拉一次 + 每 trend_refresh_ms 刷新
   void loadStats()
-  trendTimer = window.setInterval(() => void loadStats(), 60000)
+  trendTimer = window.setInterval(
+    () => void loadStats(), metricsConfigState.trend_refresh_ms)
 
-  // 访问者 IP：立即拉一次 + 每 5s 刷新（在线状态实时性）
+  // 访问者 IP：立即拉一次 + 每 visitor_refresh_ms 刷新（在线状态实时性）
   void loadVisitors()
-  visitorTimer = window.setInterval(() => void loadVisitors(), 5000)
+  visitorTimer = window.setInterval(
+    () => void loadVisitors(), metricsConfigState.visitor_refresh_ms)
 
   window.addEventListener('resize', resize)
 })
@@ -272,4 +282,38 @@ onBeforeUnmount(() => {
 .chart { height: 280px; }
 .visitor-online { font-size: 12px; color: var(--el-text-color-secondary); }
 .visitor-online b { color: var(--el-color-success); }
+
+/* 表格横向滚动：窄屏下 IP 列不溢出 */
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ══════ 响应式：≤768px 移动端 ══════ */
+@media (max-width: 768px) {
+  /* 指标卡片单列全宽，数字缩小 */
+  .stat-cards {
+    gap: 8px;
+  }
+
+  .stat-card {
+    flex: 1 1 100%;
+  }
+
+  .stat-value {
+    font-size: 20px;
+  }
+
+  /* 图表降低高度，让两张图在竖屏下都可见 */
+  .chart {
+    height: 220px;
+  }
+
+  /* 图表头部（标题 + 切换按钮）纵向排布，避免按钮挤压 */
+  .chart-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+}
 </style>

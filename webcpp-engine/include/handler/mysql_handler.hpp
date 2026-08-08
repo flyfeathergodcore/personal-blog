@@ -33,6 +33,11 @@ void RegisterBlogRoutes(Router& router, const MysqlConfig& cfg);
 //   - 读取环境变量 HOST_LAN_IP 作为宿主机局域网 IP（build-run.sh 注入）
 void InitLanStateFromDb(const MysqlConfig& cfg);
 
+// 启动时（main 线程，同步 MySQL）从 site_config(key='metrics_config') 读回
+// 后台在线覆盖的指标参数并热应用（覆盖 yaml 默认值）；表/行不存在或
+// 连接失败时静默回落 yaml 默认值，不阻塞启动。
+void InitMetricsConfigFromDb(const MysqlConfig& cfg);
+
 // 当前开关状态 / 宿主机局域网 IP（中间件、handler、demo_server 共用）
 bool IsLanEnabled();
 std::string LanIp();
@@ -66,3 +71,9 @@ namespace coro { template <typename T> class Task; }
 // 由 MultiServer 的 persist 回调调用，运行在 worker 0 的 event loop 线程
 //（GetPool 是 thread_local，此处即 worker0 的连接池）。
 coro::Task<void> PersistSiteStats(MetricsCollector* mc, const MysqlConfig& cfg);
+
+// 清理过期统计协程：删除 site_stats 中早于保留窗口的记录（retention_days 天），
+// 防止历史统计无限增长。与 PersistSiteStats 同线程调用（worker 0），
+// 通常按 cleanup_interval_secs 周期执行。参数：cfg - MySQL 连接配置；
+// retention_days - 保留窗口天数（调用方已 clamp 到 [7,3650]，无注入面）
+coro::Task<void> CleanupSiteStats(const MysqlConfig& cfg, int retention_days);

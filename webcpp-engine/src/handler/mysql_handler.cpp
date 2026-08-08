@@ -1619,6 +1619,38 @@ coro::Task<void> PersistSiteStats(MetricsCollector* mc, const MysqlConfig& cfg)
     }
 }
 
+// 清理过期统计：删除 site_stats 中早于保留窗口（retention_days 天）的记录。
+// 由 persist 回调按 cleanup_interval_secs 周期调用，运行在 worker 0 event loop
+// （thread_local 池）。参数：cfg - MySQL 连接配置；retention_days - 保留窗口
+// 天数（调用方传运行时 g_metrics_cfg.cleanup_retention_days，已 clamp [7,3650]）。
+// 失败仅记日志，下个清理周期自动重试。
+coro::Task<void> CleanupSiteStats(const MysqlConfig& cfg, int retention_days)
+{
+    ConnGuard g(GetPool(cfg));
+    if (!co_await g.borrow()) {
+        Logger::Log(LogLevel::Warn, "STATS", "清理失败：连接池借用失败");
+        co_return;
+    }
+    try {
+        // 保留窗口默认 30 天：30 天前的分钟统计删除（Dashboard 只展示 24h/7d，足够）；
+        // 天数来自运行时配置（在线可改，热生效）。retention_days 是 clamp 后的
+        // 整数，snprintf %d 无注入面。
+        char sql[128];
+        snprintf(sql, sizeof(sql),
+            "DELETE FROM site_stats WHERE ts < NOW() - INTERVAL %d DAY",
+            retention_days);
+        uint64_t affected = co_await coro::AwaitTask<uint64_t>{
+            g.get()->async_update(sql, 5000)};
+        if (affected > 0)
+            Logger::Log(LogLevel::Info, "STATS",
+                        "清理过期统计: 删除 " + std::to_string(affected) + " 行");
+    } catch (const std::exception& e) {
+        // 失败不阻塞：记日志，下个清理周期自动重试
+        Logger::Log(LogLevel::Warn, "STATS",
+                    std::string("清理失败: ") + e.what());
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // 局域网访问开关：判断与接口
 // ═══════════════════════════════════════════════════════════════════
@@ -1665,6 +1697,32 @@ bool JsonBool(std::string_view body, std::string_view key, bool def = false) {
     }
     // 兼容带引号形式 "true"/"false"
     return JsonField(body, key) == "true";
+}
+
+// 解析 JSON 数字字段（指标参数在线配置用；支持缺省回落当前值→部分更新）
+// 参数：body - JSON 对象字符串；key - 数字字段名；def - 未找到/非法时的默认值
+int JsonInt(std::string_view body, std::string_view key, int def) {
+    const std::string needle = "\"" + std::string(key) + "\"";
+    auto p = body.find(needle);
+    if (p != std::string_view::npos) {
+        auto colon = body.find(':', p + needle.size());
+        if (colon != std::string_view::npos) {
+            auto i = body.find_first_not_of(" \t", colon + 1);
+            if (i != std::string_view::npos) {
+                // 数字直接读到逗号/右花括号；负数/浮点按整段 strtol 兜底
+                auto j = i;
+                while (j < body.size() && body[j] != ',' && body[j] != '}') ++j;
+                if (j > i) {
+                    try {
+                        return std::stoi(std::string(body.substr(i, j - i)));
+                    } catch (...) {
+                        return def;   // 非数字字符串回落默认
+                    }
+                }
+            }
+        }
+    }
+    return def;
 }
 
 // GET/POST /api/network/lan
@@ -1763,6 +1821,64 @@ public:
             : R"({"config":null})";
         if (res) mysql_free_result(res);
         co_return JsonResponse(pool, 200, resp_body);
+    }
+};
+
+// ── 指标参数配置（后台「站点设置 → 指标与统计」在线读写） ──
+// 存 site_config(key='metrics_config') 的 JSON 字符串（约 150 字符，VARCHAR(255) 够用）。
+// 后端做「解析 + clamp + 热应用」：POST 后 g_metrics_cfg 立即生效（FlushLoop /
+// persist 回调 / 前端 Dashboard 轮询周期随之改变），同时落库；重启容器时由
+// InitMetricsConfigFromDb 读回覆盖 yaml 默认值。
+
+// GET/POST /api/metrics-config
+//   GET  → {flush_interval_ms, persist_interval_secs, ...}（当前运行时值）
+//   POST → body 为部分或全部字段的 JSON；缺失字段回落当前运行时值（支持部分
+//          更新），逐字段 clamp 后热应用 + 落库，返回 clamp 后的完整 JSON
+class MetricsConfigHandler : public MysqlHandlerBase {
+public:
+    using MysqlHandlerBase::MysqlHandlerBase;
+    // 处理指标参数读写：GET 返回当前运行时配置，POST 应用并落库后回显
+    // 参数：ctx - HTTP 请求上下文（含 Body）
+    coro::Task<Response> HandleAsync(const Context& ctx) override {
+        auto* pool = ctx.Pool();
+        if (!pool) co_return Response::Raw(500, "no pool");
+
+        if (ctx.Method() == "POST") {
+            const std::string body(ctx.Body());
+            // 缺省回落当前运行时值：支持只提交部分字段的部分更新
+            MetricsConfig mc;
+            mc.flush_interval_ms      = JsonInt(body, "flush_interval_ms",      g_metrics_cfg.flush_interval_ms.load());
+            mc.persist_interval_secs  = JsonInt(body, "persist_interval_secs",  g_metrics_cfg.persist_interval_secs.load());
+            mc.cleanup_interval_secs  = JsonInt(body, "cleanup_interval_secs",  g_metrics_cfg.cleanup_interval_secs.load());
+            mc.cleanup_retention_days = JsonInt(body, "cleanup_retention_days", g_metrics_cfg.cleanup_retention_days.load());
+            mc.realtime_refresh_ms    = JsonInt(body, "realtime_refresh_ms",    g_metrics_cfg.realtime_refresh_ms.load());
+            mc.trend_refresh_ms       = JsonInt(body, "trend_refresh_ms",       g_metrics_cfg.trend_refresh_ms.load());
+            mc.visitor_refresh_ms     = JsonInt(body, "visitor_refresh_ms",     g_metrics_cfg.visitor_refresh_ms.load());
+            // clamp + 热应用：立即生效，落库失败不阻塞内存生效
+            ApplyMetricsConfig(mc);
+            const std::string json = SerializeMetricsConfigJson();
+
+            // 落库（ON DUPLICATE KEY UPDATE 幂等）；失败仅记日志，下次重启读回
+            ConnGuard g(GetPool(cfg_));
+            if (co_await g.borrow()) {
+                MYSQL* raw = g.get()->raw();
+                const std::string sql =
+                    "INSERT INTO site_config(`key`,`value`) VALUES('metrics_config','"
+                    + SqlEscape(raw, json)
+                    + "') ON DUPLICATE KEY UPDATE `value`=VALUES(`value`)";
+                try {
+                    (void)co_await coro::AwaitTask<uint64_t>{
+                        g.get()->async_update(sql.c_str(), 5000)};
+                } catch (const std::exception& e) {
+                    Logger::Log(LogLevel::Warn, "METRICS",
+                                std::string("指标配置落库失败: ") + e.what());
+                }
+            }
+            co_return JsonResponse(pool, 200, json);
+        }
+
+        // GET：直接返回当前运行时配置（无 DB 交互，DB 不可达也正常）
+        co_return JsonResponse(pool, 200, SerializeMetricsConfigJson());
     }
 };
 
@@ -1894,6 +2010,46 @@ void InitLanStateFromDb(const MysqlConfig& cfg) {
     mysql_close(conn);
 }
 
+// 启动时（main 线程，同步 MySQL）从 site_config(key='metrics_config') 读回
+// 后台在线覆盖的指标参数并热应用（覆盖 yaml 默认值）；表/行不存在或连接
+// 失败时静默回落 yaml 默认值，不阻塞启动。与 InitLanStateFromDb 同模式。
+// 参数：cfg - MySQL 连接配置
+void InitMetricsConfigFromDb(const MysqlConfig& cfg) {
+    MYSQL* conn = mysql_init(nullptr);
+    if (!conn) return;
+    if (!mysql_real_connect(conn, cfg.host.c_str(), cfg.user.c_str(),
+                            cfg.password.c_str(), cfg.database.c_str(),
+                            cfg.port, nullptr, 0)) {
+        mysql_close(conn);
+        return;
+    }
+    if (mysql_query(conn,
+            "SELECT `value` FROM site_config WHERE `key`='metrics_config'") == 0) {
+        MYSQL_RES* res = mysql_store_result(conn);
+        if (res) {
+            if (mysql_num_rows(res) > 0) {
+                MYSQL_ROW row = mysql_fetch_row(res);
+                if (row && row[0]) {
+                    // 逐字段解析 + clamp + 热应用（缺省字段用当前值回落，
+                    // 与 MetricsConfigHandler 的 JsonInt 语义一致）
+                    const std::string val(row[0]);
+                    MetricsConfig mc;
+                    mc.flush_interval_ms      = JsonInt(val, "flush_interval_ms",      g_metrics_cfg.flush_interval_ms.load());
+                    mc.persist_interval_secs  = JsonInt(val, "persist_interval_secs",  g_metrics_cfg.persist_interval_secs.load());
+                    mc.cleanup_interval_secs  = JsonInt(val, "cleanup_interval_secs",  g_metrics_cfg.cleanup_interval_secs.load());
+                    mc.cleanup_retention_days = JsonInt(val, "cleanup_retention_days", g_metrics_cfg.cleanup_retention_days.load());
+                    mc.realtime_refresh_ms    = JsonInt(val, "realtime_refresh_ms",    g_metrics_cfg.realtime_refresh_ms.load());
+                    mc.trend_refresh_ms       = JsonInt(val, "trend_refresh_ms",       g_metrics_cfg.trend_refresh_ms.load());
+                    mc.visitor_refresh_ms     = JsonInt(val, "visitor_refresh_ms",     g_metrics_cfg.visitor_refresh_ms.load());
+                    ApplyMetricsConfig(mc);
+                }
+            }
+            mysql_free_result(res);
+        }
+    }
+    mysql_close(conn);
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // 路由注册
 // ═══════════════════════════════════════════════════════════════════
@@ -1905,6 +2061,8 @@ void RegisterBlogRoutes(Router& router, const MysqlConfig& cfg) {
     router.Get   ("/api/network/visitor", std::make_unique<VisitorHandler>(cfg));
     router.Get   ("/api/site-config",   std::make_unique<SiteConfigHandler>(cfg));
     router.Post  ("/api/site-config",   std::make_unique<SiteConfigHandler>(cfg));
+    router.Get   ("/api/metrics-config", std::make_unique<MetricsConfigHandler>(cfg));
+    router.Post  ("/api/metrics-config", std::make_unique<MetricsConfigHandler>(cfg));
     router.Post  ("/api/login",         std::make_unique<LoginHandler>(cfg));
     router.Get   ("/api/stats",         std::make_unique<StatsHandler>(cfg));
     router.Get   ("/api/articles",      std::make_unique<ArticlesHandler>(cfg));

@@ -137,4 +137,17 @@ watch(() => props.fileUrl, loadContent, { immediate: true })
   padding-left: 8px;
   border-left: 1px solid #f0f0f0;
 }
+
+/* ══════ 响应式：≤768px 移动端 ══════
+   右侧大纲锚点列隐藏（优先级低），文档区独占一行 */
+@media (max-width: 768px) {
+  .md-page {
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .md-anchor {
+    display: none;
+  }
+}
 </style>

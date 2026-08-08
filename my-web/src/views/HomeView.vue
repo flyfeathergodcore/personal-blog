@@ -12,8 +12,9 @@
 
     <!-- 主体区：左侧边栏 + 右侧内容 -->
     <div class="home-body">
-      <!-- 侧边栏：菜单内容由外部传入 -->
+      <!-- 侧边栏：菜单内容由外部传入（桌面端显示，移动端隐藏由 .mobile-menu-btn + 抽屉替代） -->
       <Sidebar
+        class="desktop-sidebar"
         :menu-items="sidebarItems"
         :default-active="sidebarActive"
         :default-openeds="['2', '3']"
@@ -38,12 +39,38 @@
       </div>
     </div>
 
+    <!-- 移动端汉堡按钮：始终在 DOM，桌面端 display:none，≤768px 时固定右下角显示（Chat.vue 模式） -->
+    <el-button
+      class="mobile-menu-btn"
+      type="primary"
+      size="large"
+      circle
+      :icon="Menu"
+      @click="drawerVisible = true"
+    />
+
+    <!-- 移动端侧边栏抽屉：桌面侧边栏隐藏时承载菜单，选中后自动关闭 -->
+    <el-drawer
+      v-model="drawerVisible"
+      direction="ltr"
+      size="260px"
+      :with-header="false"
+      class="sidebar-drawer"
+    >
+      <Sidebar
+        :menu-items="sidebarItems"
+        :default-active="sidebarActive"
+        :default-openeds="['2', '3']"
+        @menu-select="handleSidebarSelect"
+      />
+    </el-drawer>
   </div>
 </template>
 
 <script lang="ts" setup>
 import { ref, computed, type Component } from 'vue'
 import { ElMessage } from 'element-plus'
+import { Menu } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import { useTheme } from '../composables/useTheme'
 import { loadMenusRaw, toSidebarItems } from '../composables/useSidebarMenus'
@@ -64,6 +91,9 @@ const router = useRouter()
 
 const activeMenu = ref('1')
 const sidebarActive = ref('1')
+
+// 移动端侧边栏抽屉可见性（桌面端无需使用，hamburger 按钮 CSS 控制显隐）
+const drawerVisible = ref(false)
 
 // 日夜主题状态：由导航栏开关切换（与前台共用 useTheme，全局 html.dark）
 const { isDark } = useTheme()
@@ -147,12 +177,13 @@ const handleMenuSelect = (data: { key: string; keyPath: string[] }) => {
 }
 
 /**
- * 接收侧边栏选中通知并更新激活面板
+ * 接收侧边栏选中通知并更新激活面板；移动端抽屉选中后自动关闭
  * @param data 侧边栏选中项（key 为菜单 index）
  */
 const handleSidebarSelect = (data: { key: string; keyPath: string[] }) => {
   console.log('侧边栏菜单选择:', data)
   sidebarActive.value = data.key
+  drawerVisible.value = false
 }
 </script>
 
@@ -183,5 +214,44 @@ const handleSidebarSelect = (data: { key: string; keyPath: string[] }) => {
   color: var(--el-text-color-secondary);
   background: var(--el-fill-color-light);
   border-radius: 4px;
+}
+
+/* 移动端汉堡按钮：桌面端隐藏，≤768px 固定右下角（Chat.vue 模式：按钮常驻 DOM，CSS 控制显隐） */
+.mobile-menu-btn {
+  display: none;
+}
+
+/* ══════ 响应式：≤768px 移动端 ══════ */
+@media (max-width: 768px) {
+  /* 桌面侧边栏隐藏，改由抽屉承载 */
+  .desktop-sidebar {
+    display: none;
+  }
+
+  /* 内容区撑满全宽 + 收窄内边距 */
+  .content {
+    padding: 12px;
+  }
+
+  /* 显示右下角浮动汉堡按钮 */
+  .mobile-menu-btn {
+    display: flex;
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    z-index: 1000;
+  }
+}
+
+/* ══════ 响应式：≤480px 紧凑屏进一步压缩 ══════ */
+@media (max-width: 480px) {
+  .content {
+    padding: 8px;
+  }
+}
+
+/* 抽屉内侧边栏撑满高度（el-menu height:100% 依赖父容器） */
+.sidebar-drawer :deep(.sidebar-menu) {
+  height: 100%;
 }
 </style>

@@ -5,34 +5,42 @@
     <div class="toolbar">
       <el-button type="primary" size="small" @click="openAdd">新增用户</el-button>
     </div>
-    <el-table :data="users" border size="small">
-      <el-table-column prop="id" label="ID" width="80" />
-      <el-table-column prop="username" label="用户名" />
-      <el-table-column prop="createdAt" label="创建时间" />
-      <el-table-column label="操作" width="150">
-        <template #default="{ row }">
-          <el-button size="small" text type="primary" @click="openEdit(row)">编辑</el-button>
-          <el-button
-            size="small"
-            text
-            type="danger"
-            :disabled="row.id === '1'"
-            title="种子管理员不可删除"
-            @click="handleDelete(row)"
-          >
-            删除
-          </el-button>
-        </template>
-      </el-table-column>
-    </el-table>
+    <!-- 表格横向滚动容器：窄屏下操作列不溢出 -->
+    <div class="table-scroll">
+      <el-table :data="users" border size="small">
+        <el-table-column prop="id" label="ID" width="80" />
+        <el-table-column prop="username" label="用户名" min-width="120" />
+        <el-table-column prop="createdAt" label="创建时间" min-width="140" />
+        <el-table-column label="操作" width="150">
+          <template #default="{ row }">
+            <el-button size="small" text type="primary" @click="openEdit(row)">编辑</el-button>
+            <el-button
+              size="small"
+              text
+              type="danger"
+              :disabled="row.id === '1'"
+              title="种子管理员不可删除"
+              @click="handleDelete(row)"
+            >
+              删除
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
 
-    <!-- 新增 / 编辑对话框 -->
+    <!-- 新增 / 编辑对话框：移动端全屏 -->
     <el-dialog
       v-model="dialogVisible"
       :title="editingId ? '编辑用户' : '新增用户'"
-      width="400px"
+      :width="isMobile ? '100%' : '400px'"
+      :fullscreen="isMobile"
     >
-      <el-form label-width="80px" size="small">
+      <el-form
+        :label-position="isMobile ? 'top' : 'right'"
+        :label-width="isMobile ? 'auto' : '80px'"
+        size="small"
+      >
         <el-form-item label="用户名">
           <el-input v-model="form.username" placeholder="登录用户名" />
         </el-form-item>
@@ -65,6 +73,10 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getUsers, saveUser, deleteUser } from '../api/blog'
 import type { User } from '../api/blog'
+import { useViewport } from '../composables/useViewport'
+
+// 视口断点：移动端弹窗全屏 + 表单 label 置顶
+const { isMobile } = useViewport()
 
 const users = ref<User[]>([])
 const dialogVisible = ref(false)
@@ -160,5 +172,11 @@ onMounted(fetchData)
 
 .toolbar {
   margin-bottom: 12px;
+}
+
+/* 表格横向滚动：窄屏下列超宽时滑动查看 */
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 </style>

@@ -22,9 +22,10 @@
     </el-menu-item>
     <el-menu-item index="2">
       <el-icon><HomeFilled /></el-icon>
-      <span>主页</span>
+      <span class="menu-label">主页</span>
     </el-menu-item>
-    <el-menu-item index="3">
+    <!-- 后台入口：移动端隐藏（当前已处于后台页，窄屏让位给工作区/退出） -->
+    <el-menu-item index="3" class="menu-item-admin">
       <el-icon><Setting /></el-icon>
       <span>后台</span>
     </el-menu-item>
@@ -54,7 +55,7 @@
     <!-- 退出登录：由 HomeView 的 menu-select 处理清 token 跳登录页 -->
     <el-menu-item index="4">
       <el-icon><SwitchButton /></el-icon>
-      <span>退出</span>
+      <span class="menu-label">退出</span>
     </el-menu-item>
   </el-menu>
 </template>
@@ -204,5 +205,31 @@ defineExpose({
 /* 选中工作区子栏时高亮触发器 */
 .el-dropdown-link.is-active {
   color: var(--el-menu-active-color, #409eff);
+}
+
+/* ══════ 响应式：≤768px 移动端 ══════ */
+@media (max-width: 768px) {
+  /* 隐藏「后台」菜单项（当前已在后台页，窄屏让位） */
+  .menu-item-admin {
+    display: none;
+  }
+
+  /* 收窄菜单项间距，避免横向溢出 */
+  .custom-menu {
+    gap: 4px;
+  }
+
+  /* 工作区下拉触发器缩小内边距 */
+  .el-dropdown-link {
+    padding: 0 10px;
+  }
+}
+
+/* ══════ 响应式：≤480px 紧凑屏 ══════ */
+@media (max-width: 480px) {
+  /* 主页/退出只留图标，隐藏文字，让顶栏放下日夜开关 */
+  .menu-label {
+    display: none;
+  }
 }
 </style>

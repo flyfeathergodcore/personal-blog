@@ -18,22 +18,35 @@
       </el-select>
     </div>
 
-    <el-table :data="articles" border size="small">
-      <el-table-column prop="id" label="ID" width="60" />
-      <el-table-column prop="title" label="标题" min-width="160" />
-      <el-table-column prop="category" label="分类" width="90" />
-      <el-table-column prop="date" label="日期" width="110" />
-      <el-table-column label="操作" width="140">
-        <template #default="{ row }">
-          <el-button size="small" text @click="openDialog(row)">编辑</el-button>
-          <el-button size="small" type="danger" text @click="handleDelete(row)">删除</el-button>
-        </template>
-      </el-table-column>
-    </el-table>
+    <!-- 表格外层包裹横向滚动容器：窄屏下列超宽时可滑动查看，避免撑破面板 -->
+    <div class="table-scroll">
+      <el-table :data="articles" border size="small">
+        <el-table-column prop="id" label="ID" width="60" />
+        <el-table-column prop="title" label="标题" min-width="160" />
+        <el-table-column prop="category" label="分类" width="90" />
+        <el-table-column prop="date" label="日期" width="110" />
+        <el-table-column label="操作" width="140">
+          <template #default="{ row }">
+            <el-button size="small" text @click="openDialog(row)">编辑</el-button>
+            <el-button size="small" type="danger" text @click="handleDelete(row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
 
-    <!-- 新增/编辑弹窗 -->
-    <el-dialog v-model="dialogVisible" :title="editing ? '编辑文章' : '新增文章'" width="640px">
-      <el-form :model="form" label-width="80px" size="small">
+    <!-- 新增/编辑弹窗：移动端全屏，避免 640px 超过手机屏宽 -->
+    <el-dialog
+      v-model="dialogVisible"
+      :title="editing ? '编辑文章' : '新增文章'"
+      :width="isMobile ? '100%' : '640px'"
+      :fullscreen="isMobile"
+    >
+      <el-form
+        :model="form"
+        :label-position="isMobile ? 'top' : 'right'"
+        :label-width="isMobile ? 'auto' : '80px'"
+        size="small"
+      >
         <el-form-item label="标题" required>
           <el-input v-model="form.title" placeholder="文章标题" />
         </el-form-item>
@@ -93,7 +106,11 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getArticles, getCategories, saveArticle, deleteArticle, saveCategory } from '../api/blog'
 import type { Article, Category } from '../api/blog'
+import { useViewport } from '../composables/useViewport'
 import MdUploader from './MdUploader.vue'
+
+// 视口断点：移动端弹窗全屏 + 表单 label 置顶
+const { isMobile } = useViewport()
 
 const articles = ref<Article[]>([])
 const categories = ref<Category[]>([])
@@ -206,5 +223,20 @@ onMounted(fetchData)
   margin-top: 4px;
   font-size: 12px;
   color: #67c23a;
+}
+
+/* 表格横向滚动：窄屏下列超宽时滑动查看（el-table 自带滚动条，此处兜底容器） */
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* 移动端工具栏：筛选下拉全宽，避免溢出 */
+@media (max-width: 768px) {
+  .filter-select {
+    width: 100%;
+    margin-left: 0;
+    margin-top: 8px;
+  }
 }
 </style>

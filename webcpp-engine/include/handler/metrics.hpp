@@ -7,6 +7,7 @@
 #include <string_view>
 #include <vector>
 #include <map>
+#include "config/config.hpp"
 
 // ═══════════════════════════════════════════════════════════════
 // Metrics — thread-local counters, lock-free ring buffer
@@ -16,6 +17,32 @@ constexpr int kLatencyBuckets  = 10;
 constexpr int kRingHistory     = 60;   // 60-second sliding window
 constexpr int kMaxWorkers      = 64;
 constexpr int kDefaultPushMs   = 1000; // default SSE push interval
+
+// ── 运行时指标参数（热更新全局，读这里不读启动时 Load 一次的 Config）──
+//
+// 默认值来自 config.yaml 的 metrics: 段；后台「站点设置 → 指标与统计」
+// 在线修改后写 site_config(key='metrics_config') 并热应用到本结构体，
+// 重启容器回落 yaml 默认值。消费方：FlushLoop（flush/persist）、
+// persist 回调（cleanup）、前端 Dashboard（realtime/trend/visitor）。
+// 字段全部用 std::atomic<int>，保证多线程读安全。
+// 注意：与 config.hpp MetricsConfig、前端 defaultMetricsConfig 保持一致。
+struct RuntimeMetricsConfig {
+    std::atomic<int> flush_interval_ms      {1000};  // QPS 刷新周期（Flush 间隔，毫秒，100–1000）
+    std::atomic<int> persist_interval_secs  {60};    // 统计落库周期（秒，10–3600）
+    std::atomic<int> cleanup_interval_secs  {3600};  // 过期统计清理周期（秒，300–86400）
+    std::atomic<int> cleanup_retention_days {30};    // 清理保留窗口（天，7–3650）
+    std::atomic<int> realtime_refresh_ms    {3000};  // 前端仪表盘实时轮询（毫秒，1000–60000）
+    std::atomic<int> trend_refresh_ms       {60000}; // 前端仪表盘趋势图轮询（毫秒，5000–3600000）
+    std::atomic<int> visitor_refresh_ms     {5000};  // 前端仪表盘访问者表轮询（毫秒，1000–60000）
+};
+// 全局运行时配置（定义在 metrics.cpp）。注意：RuntimeMetricsConfig 的默认
+// 值仅是兜底；真实默认由 ApplyMetricsConfig(cfg.metrics) 从 yaml 装载。
+extern RuntimeMetricsConfig g_metrics_cfg;
+
+// 将 yaml 装载的 MetricsConfig 应用到运行时全局（带 clamp 区间校验）
+void ApplyMetricsConfig(const MetricsConfig& cfg);
+// 序列化当前运行时配置为 JSON（GET /api/metrics-config 响应 / POST 回显 / 落库共用）
+std::string SerializeMetricsConfigJson();
 
 /// Bucket upper bounds in microseconds.
 constexpr uint64_t kBucketMax[kLatencyBuckets] = {
@@ -190,6 +217,10 @@ private:
     int num_workers_;
     std::array<WorkerMetrics, kMaxWorkers> workers_{};
     std::array<RingSlot, kRingHistory> ring_{};
+    // 每个 worker 最近一次刷屏的 unix 秒（同秒累加判定：flush 周期 <1s 时
+    // 同秒多次刷屏需累加进既有槽而非覆盖，避免丢数据）。各元素仅由对应
+    // worker 线程写入（Flush 固定线程），无跨线程竞态，无需原子。
+    int64_t last_flush_secs_[kMaxWorkers] = {};
     std::chrono::steady_clock::time_point start_;
 
     // Alerts

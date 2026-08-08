@@ -483,4 +483,17 @@ const reset = () => {
   color: #409eff;
   border-color: #409eff;
 }
+
+/* 移动端：子栏行换行堆叠，输入框全宽，避免窄屏横向溢出 */
+@media (max-width: 768px) {
+  .ws-row {
+    flex-wrap: wrap;
+  }
+
+  .ws-label-input,
+  .ws-path-input {
+    flex: 1 1 100%;
+    max-width: 100%;
+  }
+}
 </style>

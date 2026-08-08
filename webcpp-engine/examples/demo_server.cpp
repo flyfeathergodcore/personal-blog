@@ -32,6 +32,7 @@
 #include <signal.h>
 #include <cctype>
 #include <cstring>
+#include <chrono>
 
 // ── SSE 示例 handler（演示 coro 流式接口）──
 class SseHandler : public RequestHandler {
@@ -193,6 +194,10 @@ int main(int argc, char** argv)
     auto cfg = Config::Load(config_path);
     Logger::Init(cfg.log_dir, cfg.log_level);
 
+    // 指标参数热配置装配：先装 yaml 默认值，再（MySQL 可用时）从
+    // site_config(key='metrics_config') 读回后台在线覆盖值覆盖之。
+    ApplyMetricsConfig(cfg.metrics);
+
     // ── Router ──
     auto file_cache = std::make_unique<FileCache>();
     file_cache->LoadDirectory(cfg.doc_root);
@@ -213,6 +218,8 @@ int main(int argc, char** argv)
                   << cfg.mysql.database << ")" << std::endl;
         // 局域网访问开关初始化：读 site_config 到内存（默认关闭），并取 HOST_LAN_IP
         InitLanStateFromDb(cfg.mysql);
+        // 指标参数读回：后台在线覆盖值热生效（覆盖上面 yaml 默认值）
+        InitMetricsConfigFromDb(cfg.mysql);
         RegisterBlogRoutes(router, cfg.mysql);
     }
 
@@ -257,8 +264,21 @@ int main(int argc, char** argv)
     // 访问统计落库：每 60s 聚合实时指标写 site_stats（后台仪表盘历史趋势数据源）。
     // 回调运行在 worker 0 的 event loop（thread_local 连接池即 worker0 的池）。
     if (!cfg.mysql.database.empty()) {
-        server.SetPersistCallback([metrics, &cfg]() -> coro::Task<void> {
+        // 清理周期判定改用 wall-clock（不再数落库次数）：落库周期在线可变后，
+        // 按次数触发会跟着漂移；且清理检查放在 PersistSiteStats 之后无条件执行
+        // ——无流量分钟落库内部 early-return 时清理也不会被饿死。
+        auto last_cleanup = std::chrono::steady_clock::now();
+        server.SetPersistCallback([metrics, &cfg, last_cleanup]() mutable -> coro::Task<void> {
             co_await PersistSiteStats(metrics.get(), cfg.mysql);
+            // 每满 cleanup_interval_secs 清理一次 retention_days 天前的 site_stats，
+            // 防止历史统计无限增长（两项均读运行时配置，后台可在线调整热生效）
+            auto now = std::chrono::steady_clock::now();
+            if (now - last_cleanup >=
+                std::chrono::seconds(g_metrics_cfg.cleanup_interval_secs.load())) {
+                last_cleanup = now;
+                co_await CleanupSiteStats(cfg.mysql,
+                                          g_metrics_cfg.cleanup_retention_days.load());
+            }
         });
     }
 

@@ -180,4 +180,11 @@ onMounted(fetchData)
   display: flex;
   gap: 8px;
 }
+
+/* 移动端：资源网格单列全宽，卡片可读性优先 */
+@media (max-width: 768px) {
+  .resource-grid {
+    grid-template-columns: 1fr;
+  }
+}
 </style>

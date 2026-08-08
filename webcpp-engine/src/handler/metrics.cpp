@@ -5,6 +5,59 @@
 #include <cassert>
 
 // ═══════════════════════════════════════════════════════════════
+// 运行时指标参数（热更新全局，读这里不读启动时 Load 一次的 Config）
+// ═══════════════════════════════════════════════════════════════
+
+namespace {
+// 数值钳制到 [lo, hi] 区间（防止配置文件 / 在线接口传值越界）
+int ClampInt(int v, int lo, int hi)
+{
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+} // namespace
+
+RuntimeMetricsConfig g_metrics_cfg;
+
+// 应用指标参数配置到运行时全局（yaml 装载与后台在线修改共用），逐字段 clamp
+// 参数：cfg - 来源配置（yaml 默认值或在线表单值）
+void ApplyMetricsConfig(const MetricsConfig& cfg)
+{
+    g_metrics_cfg.flush_interval_ms.store(ClampInt(cfg.flush_interval_ms, 100, 1000));
+    g_metrics_cfg.persist_interval_secs.store(ClampInt(cfg.persist_interval_secs, 10, 3600));
+    g_metrics_cfg.cleanup_interval_secs.store(ClampInt(cfg.cleanup_interval_secs, 300, 86400));
+    g_metrics_cfg.cleanup_retention_days.store(ClampInt(cfg.cleanup_retention_days, 7, 3650));
+    g_metrics_cfg.realtime_refresh_ms.store(ClampInt(cfg.realtime_refresh_ms, 1000, 60000));
+    g_metrics_cfg.trend_refresh_ms.store(ClampInt(cfg.trend_refresh_ms, 5000, 3600000));
+    g_metrics_cfg.visitor_refresh_ms.store(ClampInt(cfg.visitor_refresh_ms, 1000, 60000));
+}
+
+// 序列化当前运行时指标参数为 JSON（GET /api/metrics-config 响应、
+// POST 回显、落库 site_config(key='metrics_config') 共用）
+std::string SerializeMetricsConfigJson()
+{
+    std::string j;
+    j.reserve(256);
+    j += "{\"flush_interval_ms\":";
+    j += std::to_string(g_metrics_cfg.flush_interval_ms.load());
+    j += ",\"persist_interval_secs\":";
+    j += std::to_string(g_metrics_cfg.persist_interval_secs.load());
+    j += ",\"cleanup_interval_secs\":";
+    j += std::to_string(g_metrics_cfg.cleanup_interval_secs.load());
+    j += ",\"cleanup_retention_days\":";
+    j += std::to_string(g_metrics_cfg.cleanup_retention_days.load());
+    j += ",\"realtime_refresh_ms\":";
+    j += std::to_string(g_metrics_cfg.realtime_refresh_ms.load());
+    j += ",\"trend_refresh_ms\":";
+    j += std::to_string(g_metrics_cfg.trend_refresh_ms.load());
+    j += ",\"visitor_refresh_ms\":";
+    j += std::to_string(g_metrics_cfg.visitor_refresh_ms.load());
+    j += "}";
+    return j;
+}
+
+// ═══════════════════════════════════════════════════════════════
 // Percentile computation
 // ═══════════════════════════════════════════════════════════════
 
@@ -177,8 +230,33 @@ void MetricsCollector::Flush(int wid)
         now.time_since_epoch()).count();
     int slot = static_cast<int>(secs % kRingHistory);
 
-    ring_[slot].timestamp = secs;
-    ring_[slot].workers[wid] = snap;
+    // 同秒累加：flush 周期 <1s 时，本 worker 同秒内多次刷屏，把新快照累加
+    // 进既有槽（不覆盖、不丢数据）；跨秒才覆盖写新槽并推进本秒标记。
+    // 用 last_flush_secs_[wid]（本 worker 上次刷屏秒）判定而非共享槽
+    // timestamp——后者可能被其它 worker 写，无法区分"本 worker 已刷过本秒"。
+    bool new_second = (last_flush_secs_[wid] != secs);
+    if (new_second) {
+        last_flush_secs_[wid] = secs;
+        ring_[slot].timestamp = secs;
+        ring_[slot].workers[wid] = snap;
+    } else {
+        auto& ws = ring_[slot].workers[wid];
+        ws.request_count += snap.request_count;
+        ws.request_h1    += snap.request_h1;
+        ws.request_h2    += snap.request_h2;
+        ws.error_count   += snap.error_count;
+        ws.error_h1      += snap.error_h1;
+        ws.error_h2      += snap.error_h2;
+        ws.bytes_sent    += snap.bytes_sent;
+        for (int b = 0; b < kLatencyBuckets; b++)
+            ws.latency_buckets[b] += snap.latency_buckets[b];
+        // RPC 图：当前未填充，防御性累加以便未来扩展（instance/healthy 是
+        // 「当前值」语义，保持覆盖不累加）
+        for (auto& kv : snap.rpc.rpc_requests)   ws.rpc.rpc_requests[kv.first]  += kv.second;
+        for (auto& kv : snap.rpc.rpc_errors)     ws.rpc.rpc_errors[kv.first]    += kv.second;
+        for (auto& kv : snap.rpc.rpc_retries)    ws.rpc.rpc_retries[kv.first]   += kv.second;
+        for (auto& kv : snap.rpc.rpc_latency_us) ws.rpc.rpc_latency_us[kv.first] += kv.second;
+    }
 
     MetricsSnapshot total{};
     for (int i = 0; i < kMaxWorkers; i++)
@@ -196,8 +274,9 @@ void MetricsCollector::Flush(int wid)
     }
     ring_[slot].total = total;
 
-    // 采样活动连接：仅 worker 0 写，避免各 worker 重复覆盖同一 slot
-    if (wid == 0) ring_[slot].active_conn_sample = ActiveConnections();
+    // 采样活动连接：仅 worker 0 且跨秒时写（同秒多次刷屏只采一次，
+    // 保证每秒一采样，行为与默认 1s flush 一致）
+    if (wid == 0 && new_second) ring_[slot].active_conn_sample = ActiveConnections();
 
     // Evaluate alerts on worker 0's flush only (avoid duplicate evaluation)
     if (wid == 0)

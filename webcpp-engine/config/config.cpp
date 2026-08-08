@@ -86,6 +86,19 @@ Config Config::Load(const std::string& path, bool strict)
             if (mysql["max_size"]) cfg.mysql.max_size = mysql["max_size"].as<int>();
         }
 
+        // ── Metrics (metrics: { flush_interval_ms, persist_interval_secs, ... }) ──
+        // 指标参数默认值；后台「站点设置」可在线覆盖并存 site_config，重启回落这里。
+        auto metrics = root["metrics"];
+        if (metrics) {
+            if (metrics["flush_interval_ms"])      cfg.metrics.flush_interval_ms      = metrics["flush_interval_ms"].as<int>();
+            if (metrics["persist_interval_secs"])  cfg.metrics.persist_interval_secs  = metrics["persist_interval_secs"].as<int>();
+            if (metrics["cleanup_interval_secs"])  cfg.metrics.cleanup_interval_secs  = metrics["cleanup_interval_secs"].as<int>();
+            if (metrics["cleanup_retention_days"]) cfg.metrics.cleanup_retention_days = metrics["cleanup_retention_days"].as<int>();
+            if (metrics["realtime_refresh_ms"])    cfg.metrics.realtime_refresh_ms    = metrics["realtime_refresh_ms"].as<int>();
+            if (metrics["trend_refresh_ms"])       cfg.metrics.trend_refresh_ms       = metrics["trend_refresh_ms"].as<int>();
+            if (metrics["visitor_refresh_ms"])     cfg.metrics.visitor_refresh_ms     = metrics["visitor_refresh_ms"].as<int>();
+        }
+
         // ── Proxy routes ──
         auto proxy = root["proxy"];
         if (proxy && proxy.IsSequence()) {

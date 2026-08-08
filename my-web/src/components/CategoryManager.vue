@@ -6,15 +6,18 @@
       <el-input v-model="newName" placeholder="新分类名称" size="small" class="add-input" />
       <el-button type="primary" size="small" :disabled="!newName.trim()" @click="handleAdd">添加</el-button>
     </div>
-    <el-table :data="categories" border size="small">
-      <el-table-column prop="id" label="ID" width="80" />
-      <el-table-column prop="name" label="分类名" />
-      <el-table-column label="操作" width="100">
-        <template #default="{ row }">
-          <el-button size="small" type="danger" text @click="handleDelete(row)">删除</el-button>
-        </template>
-      </el-table-column>
-    </el-table>
+    <!-- 表格横向滚动容器：窄屏下列超宽时滑动查看 -->
+    <div class="table-scroll">
+      <el-table :data="categories" border size="small">
+        <el-table-column prop="id" label="ID" width="80" />
+        <el-table-column prop="name" label="分类名" min-width="140" />
+        <el-table-column label="操作" width="100">
+          <template #default="{ row }">
+            <el-button size="small" type="danger" text @click="handleDelete(row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
   </div>
 </template>
 
@@ -88,5 +91,18 @@ onMounted(fetchData)
 
 .add-input {
   flex: 1;
+}
+
+/* 表格横向滚动：窄屏下列超宽时滑动查看 */
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* 移动端：添加行全宽，避免输入框过窄 */
+@media (max-width: 768px) {
+  .add-row {
+    max-width: 100%;
+  }
 }
 </style>

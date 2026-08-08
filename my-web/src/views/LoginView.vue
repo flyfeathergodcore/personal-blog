@@ -248,4 +248,24 @@ const handleLogin = async () => {
   font-size: 13px;
   color: var(--el-text-color-secondary);
 }
+
+/* ══════ 响应式：≤768px 移动端 ══════
+   固定 400px 卡片改为流式全宽，两侧留 16px 边距，避免超过手机屏宽 */
+@media (max-width: 768px) {
+  /* flex:1 拉伸占满减去两侧边距，max-width 封顶，避免居中布局下 100%+margin 溢出 */
+  .login-card {
+    width: auto;
+    flex: 1;
+    max-width: 400px;
+    padding: 28px 20px;
+    margin: 0 16px;
+  }
+
+  /* 返回首页链接贴近边缘，避免遮挡 */
+  .back-home {
+    top: 16px;
+    left: 16px;
+    font-size: 13px;
+  }
+}
 </style>

@@ -203,4 +203,33 @@ watch(articleId, (id) => loadArticle(id), { immediate: true })
 .side-item .el-link {
   font-size: 13px;
 }
+
+/* ══════ 响应式：≤768px 移动端 ══════
+   三栏 → 单栏：左右侧栏（同分类/大纲）优先级低，直接隐藏，正文独占一行 */
+@media (max-width: 768px) {
+  .detail-body {
+    padding: 16px 12px;
+    max-width: 100%;
+    gap: 0;
+  }
+
+  .detail-side,
+  .detail-side-left {
+    display: none;
+  }
+
+  .detail-main {
+    flex: 1;
+    width: 100%;
+  }
+
+  .article-title {
+    font-size: 20px;
+  }
+
+  .article-meta {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+}
 </style>

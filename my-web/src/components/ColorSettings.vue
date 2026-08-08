@@ -2,7 +2,12 @@
 <template>
   <div class="manager-panel">
     <h3 class="panel-title">🎨 前台色彩控制</h3>
-    <el-form label-width="120px" size="small" class="color-form">
+    <el-form
+      :label-position="isMobile ? 'top' : 'right'"
+      :label-width="isMobile ? 'auto' : '120px'"
+      size="small"
+      class="color-form"
+    >
       <el-form-item v-for="item in colorItems" :key="item.key" :label="item.label">
         <el-color-picker v-model="colors[item.key]" @change="applyColors" />
         <span class="color-code">{{ colors[item.key] }}</span>
@@ -25,7 +30,11 @@
 import { reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { applyColorOverrides } from '../composables/useTheme'
+import { useViewport } from '../composables/useViewport'
 import Appearance from './Appearance.vue'
+
+// 视口断点：移动端表单 label 置顶
+const { isMobile } = useViewport()
 
 const COLORS_KEY = 'blogColors'
 

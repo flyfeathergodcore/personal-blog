@@ -50,4 +50,11 @@ const config = loadBlogConfig()
   line-height: 1.8;
   color: var(--blog-text-secondary);
 }
+
+/* ══════ 响应式：≤768px 移动端 ══════ */
+@media (max-width: 768px) {
+  .about-main {
+    padding: 32px 12px;
+  }
+}
 </style>

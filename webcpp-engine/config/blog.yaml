@@ -17,3 +17,14 @@ mysql:
   database: blog_db
   min_size: 4
   max_size: 16
+
+# 指标参数配置（默认值；后台「站点设置 → 指标与统计」可在线覆盖并存 MySQL，
+# 热生效，重启回落本段默认值。区间钳制由后端 ApplyMetricsConfig 执行）
+metrics:
+  flush_interval_ms: 1000     # QPS 刷新周期（Flush 间隔，100–1000ms）
+  persist_interval_secs: 60   # 统计落库周期（10–3600s）
+  cleanup_interval_secs: 3600 # 过期统计清理周期（300–86400s）
+  cleanup_retention_days: 30  # 清理保留窗口（7–3650 天）
+  realtime_refresh_ms: 3000   # 仪表盘实时轮询（1000–60000ms）
+  trend_refresh_ms: 60000     # 仪表盘趋势图轮询（5000–3600000ms）
+  visitor_refresh_ms: 5000    # 仪表盘访问者表轮询（1000–60000ms）

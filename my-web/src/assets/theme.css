@@ -37,3 +37,10 @@ body {
   background: var(--blog-bg);
   color: var(--blog-text);
 }
+
+/* ===== 响应式断点约定 =====
+   全站统一两个断点（与 src/composables/useViewport.ts 的 matchMedia 数值一致）：
+     - 768px 以下（≤768px）为移动端：侧边栏折叠、弹窗全屏、表单 label 置顶、表格横向滚动
+     - 480px 以下（≤480px）为紧凑屏：进一步压缩 padding / 字号 / 间距
+   CSS 变量在 @media 查询中不可用，因此各组件 scoped style 直接写数值
+   (max-width: 768px) / (max-width: 480px)，此处仅作约定注释，不新增全局规则。 */

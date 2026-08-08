@@ -197,17 +197,24 @@ coro::Task<void> MultiServer::HandlePlain(Worker& w, int wid, net::TcpStream tcp
     co_return;
 }
 
-// 周期任务协程：每秒刷一次指标，worker 0 每 60s 执行一次落库回调
+// 周期任务协程：按配置周期刷指标（flush_interval_ms），worker 0 用 wall-clock
+// 累计判定落库周期（persist_interval_secs，热可改）。参数均读运行时全局
+// g_metrics_cfg（后台「站点设置」可在线修改热生效）。
 // 参数：worker_id - worker 序号
 coro::Task<void> MultiServer::FlushLoop(int worker_id)
 {
-    int tick = 0;
+    int64_t elapsed_ms = 0;
     while (!shutdown_) {
-        co_await coro::sleep_for(1000);
+        const int flush_ms = g_metrics_cfg.flush_interval_ms.load();
+        co_await coro::sleep_for(flush_ms);
         if (shutdown_) break;
         metrics_->Flush(worker_id);
-        // 访问统计落库：worker 0 每 60s 聚合一次写 site_stats（分钟粒度历史）
-        if (worker_id == 0 && ++tick % 60 == 0 && persist_cb_) {
+        // 访问统计落库：worker 0 按 wall-clock 累计判定（改动周期立即生效，
+        // 不必重启；persist 周期改小可能提前触发一次落库，无害）
+        elapsed_ms += flush_ms;
+        if (worker_id == 0 && persist_cb_ &&
+            elapsed_ms >= static_cast<int64_t>(g_metrics_cfg.persist_interval_secs.load()) * 1000) {
+            elapsed_ms = 0;
             co_await persist_cb_();
         }
     }

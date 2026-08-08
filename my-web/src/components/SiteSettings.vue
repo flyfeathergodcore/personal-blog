@@ -6,7 +6,12 @@
       <!-- 保存按钮置于面板顶部，避免内容过长时被挤到视口外找不到 -->
       <el-button type="primary" size="small" @click="save">保存设置</el-button>
     </div>
-    <el-form label-width="100px" size="small" class="site-form">
+    <el-form
+      :label-position="isMobile ? 'top' : 'right'"
+      :label-width="isMobile ? 'auto' : '100px'"
+      size="small"
+      class="site-form"
+    >
       <el-form-item label="站点名称">
         <el-input v-model="form.siteName" />
       </el-form-item>
@@ -39,18 +44,69 @@
         添加菜单
       </el-button>
     </div>
-    <el-table :data="form.navMenus" border size="small">
-      <el-table-column prop="label" label="名称" />
-      <el-table-column prop="path" label="路径" />
-      <el-table-column label="操作" width="80">
-        <template #default="{ $index }">
-          <el-button size="small" type="danger" text @click="removeMenu($index)">删除</el-button>
-        </template>
-      </el-table-column>
-    </el-table>
+    <!-- 表格横向滚动容器：窄屏下路径列不溢出 -->
+    <div class="table-scroll">
+      <el-table :data="form.navMenus" border size="small">
+        <el-table-column prop="label" label="名称" min-width="120" />
+        <el-table-column prop="path" label="路径" min-width="160" />
+        <el-table-column label="操作" width="80">
+          <template #default="{ $index }">
+            <el-button size="small" type="danger" text @click="removeMenu($index)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
 
-    <!-- 从资源库选择背景图：展示已上传的图片资源（type==='image'），点选写入背景 -->
-    <el-dialog v-model="imagePickerVisible" title="从资源库选择背景图" width="640px">
+    <!-- 指标与统计：QPS 刷新、落库、清理、仪表盘轮询等参数。
+         后端 /api/metrics-config 热生效（存 site_config），重启容器保留 -->
+    <el-divider content-position="left">指标与统计</el-divider>
+    <el-form
+      :label-position="isMobile ? 'top' : 'right'"
+      :label-width="isMobile ? 'auto' : '130px'"
+      size="small"
+      class="metrics-form"
+    >
+      <el-form-item label="QPS 刷新周期 (ms)">
+        <el-input-number v-model="metricsForm.flush_interval_ms" :min="100" :max="1000" :step="100" />
+        <span class="metrics-unit">后端 Flush 间隔；越小 QPS 曲线越实时</span>
+      </el-form-item>
+      <el-form-item label="统计落库周期 (s)">
+        <el-input-number v-model="metricsForm.persist_interval_secs" :min="10" :max="3600" :step="10" />
+        <span class="metrics-unit">仪表盘历史趋势的落库频率</span>
+      </el-form-item>
+      <el-form-item label="清理周期 (s)">
+        <el-input-number v-model="metricsForm.cleanup_interval_secs" :min="300" :max="86400" :step="300" />
+        <span class="metrics-unit">过期统计的检查频率</span>
+      </el-form-item>
+      <el-form-item label="清理保留 (天)">
+        <el-input-number v-model="metricsForm.cleanup_retention_days" :min="7" :max="3650" :step="1" />
+        <span class="metrics-unit">site_stats 只保留最近 N 天</span>
+      </el-form-item>
+      <el-form-item label="实时轮询 (ms)">
+        <el-input-number v-model="metricsForm.realtime_refresh_ms" :min="1000" :max="60000" :step="1000" />
+        <span class="metrics-unit">仪表盘实时 QPS 刷新间隔</span>
+      </el-form-item>
+      <el-form-item label="趋势轮询 (ms)">
+        <el-input-number v-model="metricsForm.trend_refresh_ms" :min="5000" :max="3600000" :step="60000" />
+        <span class="metrics-unit">仪表盘历史趋势刷新间隔</span>
+      </el-form-item>
+      <el-form-item label="访问者轮询 (ms)">
+        <el-input-number v-model="metricsForm.visitor_refresh_ms" :min="1000" :max="60000" :step="1000" />
+        <span class="metrics-unit">仪表盘在线 IP 刷新间隔</span>
+      </el-form-item>
+    </el-form>
+    <div class="metrics-actions">
+      <el-button type="primary" size="small" @click="saveMetrics">保存指标配置</el-button>
+      <span class="metrics-hint">保存后即时生效；重启容器仍保留（存 MySQL），恢复出厂请删 site_config 的 metrics_config 行</span>
+    </div>
+
+    <!-- 从资源库选择背景图：展示已上传的图片资源（type==='image'），点选写入背景；移动端全屏 -->
+    <el-dialog
+      v-model="imagePickerVisible"
+      title="从资源库选择背景图"
+      :width="isMobile ? '100%' : '640px'"
+      :fullscreen="isMobile"
+    >
       <div class="bg-picker-grid">
         <div
           v-for="img in imageList"
@@ -80,8 +136,14 @@
 import { reactive, ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { blogConfigState, saveBlogConfig, initBlogConfig } from '../composables/useBlogConfig'
+import {
+  metricsConfigState,
+  loadMetricsConfig,
+  saveMetricsConfigAsync
+} from '../composables/useMetricsConfig'
+import { useViewport } from '../composables/useViewport'
 import { getResources, saveSiteConfig } from '../api/blog'
-import type { Resource, BlogConfig, SiteConfig } from '../api/blog'
+import type { Resource, BlogConfig, SiteConfig, MetricsConfig } from '../api/blog'
 
 // 本地编辑副本：基于全局配置当前值（后端 → store → 表单），点「保存设置」才提交
 const form = reactive<BlogConfig>({
@@ -92,8 +154,15 @@ const form = reactive<BlogConfig>({
   navMenus: blogConfigState.navMenus.map((m) => ({ ...m }))
 })
 
+// 指标参数编辑副本：基于当前运行时配置（metricsConfigState → 表单），点「保存指标配置」提交
+const metricsForm = reactive<MetricsConfig>({ ...metricsConfigState })
+
+// 视口断点：移动端弹窗全屏 + 表单 label 置顶
+const { isMobile } = useViewport()
+
 /**
- * 生命周期：挂载时拉取后端最新全局配置并同步进编辑表单（其他设备改过的配置可见）
+ * 生命周期：挂载时拉取后端最新全局配置与指标参数，并同步进编辑表单
+ * （其他设备改过的配置可见；Dashboard 设置的指标值在此回显）
  */
 onMounted(async () => {
   await initBlogConfig()
@@ -104,7 +173,23 @@ onMounted(async () => {
     background: blogConfigState.background,
     navMenus: blogConfigState.navMenus.map((m) => ({ ...m }))
   })
+  await loadMetricsConfig()
+  Object.assign(metricsForm, metricsConfigState)
 })
+
+/**
+ * 保存指标参数：提交后端（clamp + 热应用 + 落库 site_config），成功后回显 clamp 值
+ */
+const saveMetrics = async () => {
+  try {
+    const saved = await saveMetricsConfigAsync({ ...metricsForm })
+    Object.assign(metricsForm, saved)
+    ElMessage.success('指标配置已保存（即时生效，重启保留）')
+  } catch (e) {
+    const err = e instanceof Error ? e : new Error(String(e))
+    ElMessage.error('指标配置保存失败（后端不可达？）：' + err.message)
+  }
+}
 
 // 从资源库选择背景图：弹窗可见性 + 图片资源列表
 const imagePickerVisible = ref(false)
@@ -272,5 +357,57 @@ const save = async () => {
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+/* 指标与统计：数字输入框 + 单位/说明提示 */
+.metrics-form {
+  max-width: 720px;
+}
+
+.metrics-unit {
+  margin-left: 10px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.metrics-actions {
+  margin: 8px 0 4px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.metrics-hint {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+/* 表格横向滚动：窄屏下路径列不溢出 */
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* 移动端：菜单添加行允许换行，指标说明换行避免挤压 */
+@media (max-width: 768px) {
+  .menu-add-row {
+    flex-wrap: wrap;
+  }
+
+  .menu-add-input {
+    max-width: 100%;
+    flex: 1 1 100%;
+  }
+
+  .metrics-unit,
+  .metrics-hint {
+    display: block;
+    margin-left: 0;
+    margin-top: 2px;
+  }
+
+  .bg-picker-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
 }
 </style>

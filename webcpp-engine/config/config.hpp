@@ -30,6 +30,19 @@ struct MysqlConfig {
     int max_size = 16;                  // 上限
 };
 
+// 指标参数配置（metrics: 段，作为默认值）。后台「站点设置 → 指标与统计」可在线
+// 覆盖并存 MySQL site_config（热生效），重启容器回落本段默认值。
+// 注意：与 metrics.hpp 的 RuntimeMetricsConfig、前端 defaultMetricsConfig 保持一致。
+struct MetricsConfig {
+    int flush_interval_ms      = 1000;   // QPS 刷新周期（Flush 间隔，毫秒，100–1000）
+    int persist_interval_secs  = 60;     // 统计落库周期（秒，10–3600）
+    int cleanup_interval_secs  = 3600;   // 过期统计清理周期（秒，300–86400）
+    int cleanup_retention_days = 30;     // 清理保留窗口（天，7–3650）
+    int realtime_refresh_ms    = 3000;   // 前端仪表盘实时轮询（毫秒，1000–60000）
+    int trend_refresh_ms       = 60000;  // 前端仪表盘趋势图轮询（毫秒，5000–3600000）
+    int visitor_refresh_ms     = 5000;   // 前端仪表盘访问者表轮询（毫秒，1000–60000）
+};
+
 struct Config {
     std::string host = "0.0.0.0";
     unsigned short port = 8080;
@@ -53,6 +66,9 @@ struct Config {
 
     // MySQL 连接池配置（博客后端数据源；为空则后端不可用）
     MysqlConfig mysql;
+
+    // 指标参数配置（默认值，见 metrics: 段；后台可在线覆盖热生效）
+    MetricsConfig metrics;
 
     /// Load config from YAML file.  When `strict` is true (used for -t / dry-run),
     /// throws exceptions on parse / file errors instead of silently defaulting.

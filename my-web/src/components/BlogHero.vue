@@ -63,4 +63,24 @@ const doSearch = () => {
 .hero-search {
   max-width: 480px;
 }
+
+/* ══════ 响应式：≤768px 移动端 ══════ */
+@media (max-width: 768px) {
+  .blog-hero {
+    padding: 32px 0 24px;
+  }
+
+  .hero-title {
+    font-size: 24px;
+  }
+
+  .hero-slogan {
+    font-size: 14px;
+  }
+
+  /* 搜索框全宽，充分利用屏幕 */
+  .hero-search {
+    max-width: 100%;
+  }
+}
 </style>
