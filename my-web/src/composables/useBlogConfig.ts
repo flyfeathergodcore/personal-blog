@@ -21,11 +21,23 @@ export const defaultBlogConfig: SiteConfig = {
     { label: '首页', path: '/' },
     { label: '关于', path: '/about' }
   ],
+  // 首页每页文章条数：后台可配置（SiteSettings 输入框），默认 12
+  articlePageSize: 12,
   workItems: [
     { label: 'item one', index: '4-1', path: '/aichat' },
     { label: 'item two', index: '4-2', path: '' },
     { label: 'item three', index: '4-3', path: '' }
   ]
+}
+
+/**
+ * 合法化每页文章条数：须为 1~50 的整数，否则回退默认值（防脏数据/越界值）
+ * @param v 待校验的条数值（可能是旧配置缺省、字符串或越界数）
+ * @returns 1~50 内的合法整数，非法回退 12
+ */
+const normalizePageSize = (v: unknown): number => {
+  const n = typeof v === 'number' ? v : Number(v)
+  return Number.isInteger(n) && n >= 1 && n <= 50 ? n : 12
 }
 
 /**
@@ -40,7 +52,9 @@ export const loadBlogConfig = (): SiteConfig => {
       ...saved,
       // 修复：允许删空菜单——用 !== undefined 而非 .length，
       // 否则把导航菜单全删光后会回退成默认「首页 / 关于」
-      navMenus: saved.navMenus !== undefined ? saved.navMenus : defaultBlogConfig.navMenus
+      navMenus: saved.navMenus !== undefined ? saved.navMenus : defaultBlogConfig.navMenus,
+      // 每页条数合法性校验：旧配置缺省或脏数据回退默认 12
+      articlePageSize: normalizePageSize(saved.articlePageSize)
     }
   } catch {
     return { ...defaultBlogConfig }

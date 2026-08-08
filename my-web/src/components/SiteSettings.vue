@@ -33,6 +33,10 @@
           <el-button size="small" @click="form.background = ''">清除</el-button>
         </div>
       </el-form-item>
+      <el-form-item label="每页文章数">
+        <el-input-number v-model="form.articlePageSize" :min="1" :max="50" :step="1" />
+        <span class="metrics-unit">首页文章列表一页显示的条数（1~50）</span>
+      </el-form-item>
     </el-form>
 
     <!-- 导航菜单管理 -->
@@ -151,7 +155,8 @@ const form = reactive<BlogConfig>({
   slogan: blogConfigState.slogan,
   copyright: blogConfigState.copyright,
   background: blogConfigState.background,
-  navMenus: blogConfigState.navMenus.map((m) => ({ ...m }))
+  navMenus: blogConfigState.navMenus.map((m) => ({ ...m })),
+  articlePageSize: blogConfigState.articlePageSize || 12
 })
 
 // 指标参数编辑副本：基于当前运行时配置（metricsConfigState → 表单），点「保存指标配置」提交
@@ -171,7 +176,8 @@ onMounted(async () => {
     slogan: blogConfigState.slogan,
     copyright: blogConfigState.copyright,
     background: blogConfigState.background,
-    navMenus: blogConfigState.navMenus.map((m) => ({ ...m }))
+    navMenus: blogConfigState.navMenus.map((m) => ({ ...m })),
+    articlePageSize: blogConfigState.articlePageSize || 12
   })
   await loadMetricsConfig()
   Object.assign(metricsForm, metricsConfigState)

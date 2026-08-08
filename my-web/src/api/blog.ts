@@ -46,6 +46,9 @@ export interface BlogConfig {
   copyright: string
   background: string // CSS background 值或图片 URL，留空走默认
   navMenus: { label: string; path: string }[]
+  // 首页文章列表每页条数：后台「站点设置」可配置，前端 ArticleList 读取；
+  // 可选字段——旧配置没有该值时报默认 12（useBlogConfig 合并时兜底）
+  articlePageSize?: number
 }
 
 // 站点全局配置（后端 /api/site-config 存取）：在 BlogConfig 基础上增加工作区子栏。

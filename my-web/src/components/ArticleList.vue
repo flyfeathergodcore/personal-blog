@@ -41,6 +41,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { getArticles, getCategories } from '../api/blog'
 import type { Article, Category } from '../api/blog'
+import { blogConfigState } from '../composables/useBlogConfig'
 import ArticleCard from './ArticleCard.vue'
 
 const props = defineProps({
@@ -59,9 +60,20 @@ const loading = ref(true)
 const error = ref('')
 const activeCategory = ref(props.initialCategory)
 
-// 分页状态
+// 分页状态：每页条数由后台「站点设置 → 每页文章数」控制（可配置，默认 12）；
+// 从全局 blogConfigState 读取，后台保存后热生效（blogConfigState 是响应式对象）
 const page = ref(1)
-const pageSize = 6
+const pageSize = computed(() => {
+  const n = blogConfigState.articlePageSize
+  // 类型收窄 + 合法范围校验：非法/脏数据回退默认 12
+  if (typeof n !== 'number' || !Number.isInteger(n) || n < 1 || n > 50) return 12
+  return n
+})
+
+// 后台改了每页条数后重置到第 1 页，避免当前页码越界导致列表空白
+watch(pageSize, () => {
+  page.value = 1
+})
 
 /**
  * 拉取文章列表与分类数据；失败时写入 error 用于展示重试入口
@@ -112,8 +124,8 @@ const filteredArticles = computed(() => {
  * 当前页文章：对过滤结果按 page/pageSize 切片
  */
 const pagedArticles = computed(() => {
-  const start = (page.value - 1) * pageSize
-  return filteredArticles.value.slice(start, start + pageSize)
+  const start = (page.value - 1) * pageSize.value
+  return filteredArticles.value.slice(start, start + pageSize.value)
 })
 
 onMounted(fetchData)
