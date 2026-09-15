@@ -181,12 +181,17 @@ static void test_peer_settings_make_stream_window_negative()
 }
 
 // ── 发送账：SETTINGS 不触碰接收账 ──
+// 必须用【调小】。调大时流级被抬高到 130972，但 RecvWindow 取 min(流, 连接)，
+// 连接账 65435 仍是瓶颈 —— 串不串账都返回 65435，断言恒真，什么也锁不住。
+// 实测：造一个「对端 SETTINGS 误伤流级接收账」的实现，131072 版本 39 条全绿。
+// 调小到 1000 则 delta = -64535，流级被压到 900，成为 min 的较小者，
+// 串账立刻暴露成 900 ≠ 65435。
 static void test_peer_settings_do_not_touch_recv_accounts()
 {
     H2FlowControl fc;
     fc.ConsumeRecv(1, 100);
 
-    fc.SetPeerInitialWindow(131072);
+    fc.SetPeerInitialWindow(1000);   // delta = -64535 → 误串账时 recv_[1] = 900
     CHECK(fc.RecvWindow(1) == 65435, "接收账完全不受对端 SETTINGS 影响");
     CHECK(fc.RecvWindow(0) == 65435, "连接级接收账同样不受影响");
 }
