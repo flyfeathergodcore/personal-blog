@@ -76,8 +76,7 @@ void H2FlowControl::ConsumeRecv(uint32_t stream_id, uint32_t n)
     }
 }
 
-// 查询当前可接收额度：只报该实体自己的接收窗口，负值 clamp 到 0。
-// 流级不做与连接窗口的 min —— 那是调用方按需组合两个 RecvWindow 的事。
+// 查询当前可接收额度：流级窗口取流与连接的较小值（谁先耗尽谁说了算）。
 // 参数：stream_id - 流 ID（0 = 连接级）
 uint32_t H2FlowControl::RecvWindow(uint32_t stream_id) const
 {
@@ -88,7 +87,7 @@ uint32_t H2FlowControl::RecvWindow(uint32_t stream_id) const
     if (it == recv_.end())
         return recv_initial_;   // 未知流：按初始窗口满额
 
-    return Clamp(it->second.credit);
+    return std::min(Clamp(it->second.credit), Clamp(conn_recv_.credit));
 }
 
 // 判断是否该为该实体发 WINDOW_UPDATE：已消费达到初始窗口一半时返回 true。

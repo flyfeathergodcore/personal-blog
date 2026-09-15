@@ -28,15 +28,28 @@ static void test_consume_recv_deducts_connection_once()
 
 // ── 接收账：SETTINGS 不动连接窗口（RFC 7540 §6.9.2）──
 // B19：旧的 SetInitialWindow 会一起调整 conn_.credit。
+//
+// 注意 RecvWindow 取【流与连接的较小值】，而 SETTINGS 只放大流级窗口时连接
+// 必然仍是瓶颈——调大的方向看不出流级的变化。所以要观测流级的 delta，
+// 必须用【调小】把流级压成瓶颈；调大的方向则单独验证连接窗口没被带上。
 static void test_local_settings_do_not_touch_connection_window()
 {
     H2FlowControl fc;
-    fc.ConsumeRecv(1, 100);                 // 让流 1 存在于映射里
-    fc.SetLocalInitialWindow(131072);       // 本端把初始窗口改成 128KB
+    fc.ConsumeRecv(1, 100);                 // 流 1 与连接各扣 100
 
-    CHECK(fc.RecvWindow(1) == 131072 - 100, "流级接收窗口按 delta 调整");
+    fc.SetLocalInitialWindow(32768);        // 调小：流级成为瓶颈，变化可见
+    CHECK(fc.RecvWindow(1) == 32768 - 100,
+          "流级接收窗口按 delta(-32767) 调整");
     CHECK(fc.RecvWindow(0) == 65535 - 100,
           "连接级接收窗口不受 SETTINGS 影响");
+
+    // 反向验证：调大时若像旧实现那样把 delta 也加到连接账，
+    // 连接窗口会变成 130972 —— 这里必须是 65435。
+    H2FlowControl fc2;
+    fc2.ConsumeRecv(1, 100);
+    fc2.SetLocalInitialWindow(131072);
+    CHECK(fc2.RecvWindow(0) == 65535 - 100,
+          "调大时连接级窗口同样不受影响（旧实现会变成 130972）");
 }
 
 // ── 接收账：补窗口的增量等于已消费量 ──

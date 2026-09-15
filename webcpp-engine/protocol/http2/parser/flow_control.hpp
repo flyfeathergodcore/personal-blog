@@ -42,9 +42,7 @@ public:
     /// 参数：stream_id - 流 ID（0 = 连接级）；n - 消费的字节数
     void ConsumeRecv(uint32_t stream_id, uint32_t n);
 
-    /// 本端在该实体上的接收窗口，负值 clamp 到 0。只报【单本账】：
-    /// 流级返回流自己的窗口，不在此处对连接窗口取较小值——调用方若需要
-    /// "对端还能发多少"的双重约束，自行对 RecvWindow(sid) 与 RecvWindow(0) 取 min。
+    /// 本端还能接收多少字节。流级取流与连接的较小值，负值 clamp 到 0。
     /// 参数：stream_id - 流 ID（0 = 连接级）；返回：可用接收额度
     uint32_t RecvWindow(uint32_t stream_id) const;
 
