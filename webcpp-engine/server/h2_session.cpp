@@ -221,12 +221,11 @@ void H2Session::OnSettings(const H2FrameHeader& hdr, const uint8_t* payload)
         peer_max_concurrent_ = *s.max_concurrent_streams;
 
     if (s.initial_window_size) {
-        // 注意：peer 的 INITIAL_WINDOW_SIZE 只影响"我方发给 peer"的发送窗口，
-        // 与"我方接收 peer 数据"的窗口无关（后者由我方 SETTINGS 广告、由 WINDOW_UPDATE 补充）。
-        // 不能调用 flow_control_.SetPeerInitialWindow()——那会把 ShouldUpdate 的补充阈值
-        // 顶到 peer 的 10MB，导致收满我方 64KB 广告窗口后永不再发 WINDOW_UPDATE（大 body 死锁）。
-        // 我方接收窗口保持 65535，ConsumeBytes/ShouldUpdate/PopCredit 按此节奏补充即可。
+        // 对端 SETTINGS 的 INITIAL_WINDOW_SIZE 作用于【我方发送账】，与接收账无关。
+        // SetPeerInitialWindow 只调整流级发送窗口，不碰接收账，因此不会再触到
+        // ShouldUpdate 的补充阈值 —— 旧实现正是因为这个才绕开它（见附录 A 的 B18）。
         peer_initial_window_ = *s.initial_window_size;
+        flow_control_.SetPeerInitialWindow(*s.initial_window_size);
     }
 
     if (s.max_frame_size) {
@@ -371,8 +370,10 @@ void H2Session::OnData(const H2FrameHeader& hdr, const uint8_t* payload)
 
     // Flow control: consume bytes from window
     auto actual_len = static_cast<uint32_t>(data_len);
-    flow_control_.ConsumeBytes(sid, actual_len);
-    flow_control_.ConsumeBytes(0, actual_len);  // connection-level
+    // 只调一次：连接账在 ConsumeRecv 内部一并扣。
+    // （此处原本还有一行 ConsumeRecv(0, ...)，导致连接级 WINDOW_UPDATE 的
+    //  增量翻倍，对端连接窗口无界膨胀 —— 见设计文档附录 A 的 B1。）
+    flow_control_.ConsumeRecv(sid, actual_len);
 
     // Check if stream is already being handled (WS)
     if (ctx.ws_active_) {
@@ -795,6 +796,7 @@ coro::Task<void> H2Session::RunWsHandler(
     conn.reset();
     h2self->streams_.erase(stream_id);
     h2self->stream_mgr_.RemoveStream(stream_id);
+    h2self->flow_control_.RemoveStream(stream_id);   // 两本账一并清理，避免映射无界增长
     if (h2self->streams_.empty())
         h2self->Region().Reset();
     co_return;
@@ -813,6 +815,7 @@ coro::Task<void> H2Session::HandleStream(int32_t stream_id)
     if (ctx.stream_closed_) {
         streams_.erase(stream_id);
         stream_mgr_.RemoveStream(stream_id);
+        flow_control_.RemoveStream(stream_id);   // 两本账一并清理，避免映射无界增长
         co_return;
     }
 
@@ -825,6 +828,7 @@ coro::Task<void> H2Session::HandleStream(int32_t stream_id)
         co_await FlushOutput();
         streams_.erase(stream_id);
         stream_mgr_.RemoveStream(stream_id);
+        flow_control_.RemoveStream(stream_id);   // 两本账一并清理，避免映射无界增长
         co_return;
     }
 
@@ -910,6 +914,7 @@ coro::Task<void> H2Session::HandleStream(int32_t stream_id)
             co_await FlushOutput();
             streams_.erase(stream_id);
             stream_mgr_.RemoveStream(stream_id);
+            flow_control_.RemoveStream(stream_id);   // 两本账一并清理，避免映射无界增长
             co_return;
         }
 
@@ -1010,6 +1015,7 @@ cleanup:
     // Clean up stream context
     streams_.erase(stream_id);
     stream_mgr_.RemoveStream(stream_id);
+    flow_control_.RemoveStream(stream_id);   // 两本账一并清理，避免映射无界增长
 
     // Reset the region when all streams on this connection are done
     if (streams_.empty())
