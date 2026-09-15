@@ -17,6 +17,7 @@
 #include <memory>
 
 class RegionPool;
+class H2StreamWriter;
 
 // ── H2Session ──
 //
@@ -54,7 +55,7 @@ public:
     coro::Task<void> Start() override;
 
 private:
-    friend class H2StreamSink;
+    friend class H2StreamWriter;
     // ── Core ──
     net::TlsStream stream_;
     coro::EventLoop& loop_;   // 构造时取自 coro::EventLoop::current()（worker loop）

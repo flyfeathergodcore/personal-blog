@@ -60,6 +60,7 @@ set(WEBCPP_ENGINE_SOURCES
     server/h11_session.cpp
     server/h11_session_pool.cpp
     server/h2_session.cpp
+    server/h2_stream_writer.cpp
     protocol/response.cpp
     protocol/region_pool.cpp
     protocol/session_region.cpp

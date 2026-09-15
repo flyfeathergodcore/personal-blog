@@ -1,4 +1,5 @@
 #include "server/h2_session.hpp"
+#include "server/h2_stream_writer.hpp"
 #include "protocol/region_pool.hpp"
 #include "server/sse_push.hpp"
 #include "handler/metrics.hpp"
@@ -595,48 +596,6 @@ void H2Session::WakeWsStream(H2StreamContext& ctx)
 }
 
 // ═══════════════════════════════════════════════════════════════
-// ═══════════════════════════════════════════════════════════════════
-// H2StreamSink — H2 的 StreamSink 实现
-// ═══════════════════════════════════════════════════════════════════
-
-class H2StreamSink : public StreamSink {
-public:
-    // 构造函数：绑定会话与流 ID，供以 StreamSink 接口写 H2 DATA 帧
-    // 参数：session - 所属 H2 会话；stream_id - 目标流 ID
-    H2StreamSink(H2Session& session, int32_t stream_id)
-        : session_(session), stream_id_(stream_id) {}
-
-    // 写入一段数据为 DATA 帧并刷出；已结束/失败后返回 false 并置结束标记
-    // 参数：data - 待写入数据；返回：写入成功与否
-    coro::Task<bool> Write(std::string_view data) override {
-        if (ended_) co_return false;
-        session_.WriteData(stream_id_,
-            reinterpret_cast<const uint8_t*>(data.data()),
-            data.size(), false);
-        bool ok = co_await session_.FlushOutput();
-        if (!ok) ended_ = true;
-        co_return ok;
-    }
-
-    // 结束流：发送带 END_STREAM 的空 DATA 帧并标记结束
-    // 参数：无
-    void End() override {
-        if (!ended_) {
-            session_.WriteData(stream_id_, nullptr, 0, true);  // END_STREAM
-            ended_ = true;
-        }
-    }
-
-    // 查询流是否已结束
-    // 参数：无；返回：是否结束
-    bool IsDisconnected() const override { return ended_; }
-
-private:
-    H2Session& session_;
-    int32_t stream_id_;
-    bool ended_ = false;
-};
-
 // ═══════════════════════════════════════════════════════════════
 // ProcessPending — drain the stream pending queue
 // ═══════════════════════════════════════════════════════════════
@@ -839,7 +798,7 @@ coro::Task<void> H2Session::HandleStream(int32_t stream_id)
                         init.size(), false);
                     co_await FlushOutput();
                 }
-                H2StreamSink sink(*this, stream_id);
+                H2StreamWriter sink(*this, stream_id);
                 co_await handler->HandleStream(ctx, sink);
                 sink.End();
                 co_await FlushOutput();
