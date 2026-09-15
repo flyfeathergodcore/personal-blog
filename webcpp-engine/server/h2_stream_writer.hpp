@@ -11,7 +11,8 @@ public:
     H2StreamWriter(H2Session& session, int32_t stream_id);
 
     coro::Task<bool> Write(std::string_view data) override;
-    void End() override;
+    coro::Task<void> End() override;
+    bool Writable() const;
     bool IsDisconnected() const override;
 
 private:

@@ -9,20 +9,24 @@ H2StreamWriter::H2StreamWriter(H2Session& session, int32_t stream_id)
 coro::Task<bool> H2StreamWriter::Write(std::string_view data)
 {
     if (ended_) co_return false;
-    session_.WriteData(stream_id_, reinterpret_cast<const uint8_t*>(data.data()), data.size(), false);
-    const bool ok = co_await session_.FlushOutput();
+    const bool ok = co_await session_.SendData(stream_id_, data);
     if (!ok) ended_ = true;
     co_return ok;
 }
 
-void H2StreamWriter::End()
+coro::Task<void> H2StreamWriter::End()
 {
-    if (ended_) return;
-    session_.WriteData(stream_id_, nullptr, 0, true);
+    if (ended_) co_return;
     ended_ = true;
+    co_await session_.EndStream(stream_id_);
+}
+
+bool H2StreamWriter::Writable() const
+{
+    return !ended_ && session_.StreamWritable(stream_id_);
 }
 
 bool H2StreamWriter::IsDisconnected() const
 {
-    return ended_;
+    return !Writable();
 }

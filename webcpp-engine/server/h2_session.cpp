@@ -14,6 +14,11 @@
 #include <utility>
 #include <coroutine>
 #include <openssl/ssl.h>
+#include <atomic>
+
+namespace {
+std::atomic<std::size_t> g_h2_waiter_id{1};
+}
 
 // ═══════════════════════════════════════════════════════════════
 // Lifecycle
@@ -72,7 +77,10 @@ coro::Task<void> H2Session::Start()
     {
         while (!goaway_received_ && !goaway_sent_)
         {
-            if (!co_await frame_reader_.Read(socket_)) break;
+            if (!co_await frame_reader_.Read(socket_)) {
+                WakeAllStreams(H2SendWakeReason::Terminated);
+                break;
+            }
 
             for (;;) {
                 H2FrameReader::Frame frame;
@@ -92,6 +100,14 @@ coro::Task<void> H2Session::Start()
             // ── Process pending streams ──
             co_await ProcessPending();
 
+            // WINDOW_UPDATE 在当前 Session 协程运行时投递的写协程，必须先回到
+            // EventLoop 的任务队列执行；否则本协程会直接再次挂到 socket 读取，
+            // 使已获额度的流错误地等到下一次入站帧才续发。
+            if (send_wakeup_posted_) {
+                send_wakeup_posted_ = false;
+                co_await coro::sleep_for(1);
+            }
+
             // ── Flush output ──
             // Flush once (sends the initial response headers)
             if (!co_await FlushOutput()) break;
@@ -107,6 +123,8 @@ coro::Task<void> H2Session::Start()
 
     // ── Graceful GOAWAY ──
     if (!goaway_sent_) {
+        goaway_sent_ = true;
+        WakeAllStreams(H2SendWakeReason::Terminated);
         WriteGoAway(stream_mgr_.LastClientStreamId(), H2Error::NO_ERROR);
         co_await FlushOutput();
     }
@@ -405,6 +423,7 @@ void H2Session::OnRstStream(const H2FrameHeader& hdr, const uint8_t* payload)
     auto it = streams_.find(sid);
     if (it != streams_.end()) {
         it->second.stream_closed_ = true;
+        WakeSendStream(it->second, H2SendWakeReason::Terminated);
         if (it->second.ws_active_)
             WakeWsStream(it->second);
     }
@@ -438,6 +457,7 @@ void H2Session::OnGoAway(const H2FrameHeader& hdr, const uint8_t* payload)
     if (hdr.length < 8) return;
     (void)payload;
     goaway_received_ = true;
+    WakeAllStreams(H2SendWakeReason::Terminated);
 
     // Peer is shutting down — stop accepting new streams
     if (!goaway_sent_) {
@@ -473,6 +493,13 @@ void H2Session::OnWindowUpdate(const H2FrameHeader& hdr, const uint8_t* payload)
     if (!flow_control_.AddSendCredit(hdr.stream_id, increment)) {
         WriteGoAway(stream_mgr_.LastClientStreamId(), H2Error::FLOW_CONTROL_ERROR);
         goaway_sent_ = true;
+        WakeAllStreams(H2SendWakeReason::Terminated);
+    } else if (hdr.stream_id == 0) {
+        WakeAllStreams(H2SendWakeReason::Window);
+    } else {
+        auto it = streams_.find(hdr.stream_id);
+        if (it != streams_.end())
+            WakeSendStream(it->second, H2SendWakeReason::Window);
     }
 }
 
@@ -502,7 +529,9 @@ coro::Task<bool> H2Session::FlushOutput()
     if (flushing_) co_return true;
     flushing_ = true;
 
-    if (!output_.empty()) {
+    for (;;) {
+        if (output_.empty())
+            break;
         // Swap to local buffer: spawned WS handler can safely append
         // to output_ while we send the current batch asynchronously.
         std::vector<uint8_t> send_buf;
@@ -512,6 +541,7 @@ coro::Task<bool> H2Session::FlushOutput()
             reinterpret_cast<const char*>(send_buf.data()), send_buf.size()));
         if (!ok) {
             flushing_ = false;
+            WakeAllStreams(H2SendWakeReason::Terminated);
             co_return false;
         }
     }
@@ -539,6 +569,104 @@ void H2Session::WakeWsStream(H2StreamContext& ctx)
     }
 }
 
+struct H2Session::SendWaitAwaiter {
+    H2Session& session;
+    H2StreamContext& context;
+    int32_t stream_id;
+    H2SendWakeReason immediate_reason = H2SendWakeReason::None;
+
+    bool await_ready() noexcept
+    {
+        if (!session.StreamWritable(stream_id)) {
+            immediate_reason = H2SendWakeReason::Terminated;
+            return true;
+        }
+        if (session.flow_control_.SendWindow(stream_id) != 0) {
+            immediate_reason = H2SendWakeReason::Window;
+            return true;
+        }
+        return false;
+    }
+
+    void await_suspend(std::coroutine_handle<> h) noexcept
+    {
+        auto& wait = context.send_wakeup_;
+        wait.loop = &session.loop_;
+        wait.waiter = h;
+        wait.reason = H2SendWakeReason::None;
+        wait.timer_id = g_h2_waiter_id.fetch_add(1, std::memory_order_relaxed);
+        wait.loop->wait_timer_cancelable(session.kSendWindowTimeoutMs,
+                                         h, wait.timer_id);
+    }
+
+    H2SendWakeReason await_resume() noexcept
+    {
+        auto& wait = context.send_wakeup_;
+        if (wait.timer_id != 0)
+            wait.loop->cancel_timer(wait.timer_id);
+        const auto reason = wait.reason == H2SendWakeReason::None
+            ? immediate_reason : wait.reason;
+        wait.timer_id = 0;
+        wait.waiter = {};
+        wait.reason = H2SendWakeReason::None;
+        return reason == H2SendWakeReason::None
+            ? H2SendWakeReason::Timeout
+            : reason;
+    }
+};
+
+coro::Task<bool> H2Session::WaitForSendable(int32_t sid)
+{
+    auto it = streams_.find(sid);
+    if (it == streams_.end()) co_return false;
+    if (!StreamWritable(sid)) co_return false;
+    if (flow_control_.SendWindow(sid) != 0) co_return true;
+
+    // A timeout is represented by no wake reason when the cancelable timer fires.
+    const auto reason = co_await SendWaitAwaiter{*this, it->second, sid};
+    if (reason == H2SendWakeReason::Timeout) {
+        WriteRstStream(sid, H2Error::CANCEL);
+        auto current = streams_.find(sid);
+        if (current != streams_.end())
+            current->second.stream_closed_ = true;
+        stream_mgr_.OnStreamClose(sid);
+        co_await FlushOutput();
+        co_return false;
+    }
+    co_return StreamWritable(sid) && flow_control_.SendWindow(sid) != 0;
+}
+
+bool H2Session::StreamWritable(int32_t sid) const
+{
+    if (goaway_sent_ || goaway_received_) return false;
+    auto it = streams_.find(sid);
+    return it != streams_.end() && !it->second.stream_closed_;
+}
+
+void H2Session::WakeSendStream(H2StreamContext& ctx, H2SendWakeReason reason)
+{
+    auto& wait = ctx.send_wakeup_;
+    if (!wait.waiter || wait.reason != H2SendWakeReason::None) return;
+    wait.reason = reason;
+    if (wait.loop && wait.timer_id != 0 && wait.loop->cancel_timer(wait.timer_id)) {
+        wait.loop->post(wait.waiter);
+        send_wakeup_posted_ = true;
+    }
+}
+
+void H2Session::WakeAllStreams(H2SendWakeReason reason)
+{
+    for (auto& [sid, ctx] : streams_)
+        WakeSendStream(ctx, reason);
+}
+
+void H2Session::FinishStream(int32_t sid)
+{
+    streams_.erase(sid);
+    stream_mgr_.RemoveStream(sid);
+    flow_control_.RemoveStream(sid);
+}
+
 // ═══════════════════════════════════════════════════════════════
 // ═══════════════════════════════════════════════════════════════
 // ProcessPending — drain the stream pending queue
@@ -551,7 +679,11 @@ coro::Task<void> H2Session::ProcessPending()
     while (stream_mgr_.HasPending()) {
         auto sid = stream_mgr_.Dequeue();
         auto self = std::static_pointer_cast<H2Session>(shared_from_this());
-        net::spawn(self->HandleStream(sid), loop_);
+        auto task = self->HandleStream(sid);
+        // 立即推进到第一次挂起点。EventLoop::post 在当前协程还未挂起时只会
+        // 入队，可能要等下一次网络事件才被取出；先启动保证流处理器已就绪，
+        // 后续的窗口/IO 等待仍由事件循环独立恢复。
+        task.handle().resume();
     }
     co_return;
 }
@@ -569,11 +701,42 @@ void H2Session::WriteHeaders(int32_t sid,
     frame_enc_.AppendHeaders(sid, hpack, end_headers);
 }
 
-// 按对端 SETTINGS_MAX_FRAME_SIZE 把数据切成若干 DATA 帧追加到 output_，END_STREAM 标志落在最后一帧
-// 参数：sid - 目标流 ID；data - 负载指针（可空）；len - 负载长度；end_stream - 是否结束流
-void H2Session::WriteData(int32_t sid, const uint8_t* data, size_t len, bool end_stream)
+coro::Task<bool> H2Session::SendData(int32_t sid, std::string_view data)
 {
-    frame_enc_.AppendData(sid, data, len, end_stream);
+    if (!StreamWritable(sid)) co_return false;
+
+    size_t offset = 0;
+    while (offset < data.size()) {
+        if (!StreamWritable(sid)) co_return false;
+
+        const auto available = flow_control_.SendWindow(sid);
+        if (available == 0) {
+            if (!(co_await WaitForSendable(sid)))
+                co_return false;
+            continue;
+        }
+
+        const size_t chunk = std::min({
+            data.size() - offset,
+            static_cast<size_t>(available),
+            static_cast<size_t>(frame_enc_.PeerMaxFrameSize())});
+        if (chunk == 0) co_return false;
+
+        frame_enc_.AppendData(sid,
+            reinterpret_cast<const uint8_t*>(data.data() + offset),
+            chunk, false);
+        flow_control_.ConsumeSend(sid, static_cast<uint32_t>(chunk));
+        offset += chunk;
+    }
+
+    co_return co_await FlushOutput();
+}
+
+coro::Task<void> H2Session::EndStream(int32_t sid)
+{
+    if (!StreamWritable(sid)) co_return;
+    frame_enc_.AppendData(sid, nullptr, 0, true);
+    co_await FlushOutput();
 }
 
 // 追加一条 RST_STREAM 帧到 output_，用于中止/关闭流
@@ -651,194 +814,10 @@ void H2Session::WriteResponseHeaders(int32_t sid, const Response& resp)
     WriteHeaders(sid, hpack, true);
 }
 
-// ═══════════════════════════════════════════════════════════════
-// HandleStream — process one HTTP request
-//
-// Mirrors the original HandleStream logic.  Changes:
-//   - Replaced nghttp2_submit_headers → HPACK encode + WriteHeaders
-//   - Replaced nghttp2_submit_data → WriteData
-//   - Replaced cb_data_read callback → direct buffer writes
-//   - WS connection passes output_ reference instead of nghttp2_session
-//   - WS 并发由 asio::co_spawn 改为 net::spawn(loop_)
-// ═══════════════════════════════════════════════════════════════
-
-// 独立并发运行的 WS 处理器协程：调用 handler 处理 WS 流，结束后清理流与区域状态
-// 参数：h2self - 会话自身（shared_ptr 按值保活）；stream_id - WS 流 ID；conn - H2 WS 连接；ws_handler - WS 处理器
-// WS 处理器协程：原为 HandleStream 内立即调用的 lambda 协程，闭包临时对象在
-// 赋值语句后销毁、协程被 spawn 长期挂起 → 闭包 this/捕获悬垂（GCC 侥幸不崩，
-// clang 严格按标准 use-after-scope）。提为静态成员：h2self/conn 按值
-// （shared_ptr 拷贝）进帧，挂起期间始终存活，跨编译器安全。
-coro::Task<void> H2Session::RunWsHandler(
-    std::shared_ptr<H2Session> h2self, int32_t stream_id,
-    std::shared_ptr<H2WsConnection> conn, RequestHandler* ws_handler)
-{
-    try {
-        auto& ws_ctx = h2self->streams_.at(stream_id);
-        co_await ws_handler->HandleWebSocket(ws_ctx, *conn);
-        h2self->WriteRstStream(stream_id, H2Error::NO_ERROR);
-    } catch (std::exception& e) {
-        std::cerr << "[h2] WS handler error: "
-                  << e.what() << std::endl;
-        h2self->WriteRstStream(stream_id, H2Error::INTERNAL_ERROR);
-    }
-    co_await h2self->FlushOutput();
-    conn->MarkClosed();
-    conn.reset();
-    h2self->streams_.erase(stream_id);
-    h2self->stream_mgr_.RemoveStream(stream_id);
-    h2self->flow_control_.RemoveStream(stream_id);   // 两本账一并清理，避免映射无界增长
-    co_return;
-}
-
 // 处理单条 HTTP/2 请求流：中间件→路由→响应，支持 SSE 推送与 RFC 8441 WS 分支；末尾清理流与区域
 // 参数：stream_id - 待处理的流 ID
 coro::Task<void> H2Session::HandleStream(int32_t stream_id)
 {
-    co_await H2StreamProcessor(*this, stream_id).Run();
-}
-
-coro::Task<void> H2Session::ProcessStream(int32_t stream_id)
-{
-    auto it = streams_.find(stream_id);
-    if (it == streams_.end()) co_return;
-
-    auto& ctx = it->second;
-
-    // Client already reset this stream
-    if (ctx.stream_closed_) {
-        streams_.erase(stream_id);
-        stream_mgr_.RemoveStream(stream_id);
-        flow_control_.RemoveStream(stream_id);   // 两本账一并清理，避免映射无界增长
-        co_return;
-    }
-
-
-    // ── Body size check ──
-    if (max_body_size_ > 0 && ctx.ContentLength() > max_body_size_) {
-        WriteRstStream(stream_id, H2Error::REFUSED_STREAM);
-        co_await FlushOutput();
-        streams_.erase(stream_id);
-        stream_mgr_.RemoveStream(stream_id);
-        flow_control_.RemoveStream(stream_id);   // 两本账一并清理，避免映射无界增长
-        co_return;
-    }
-
-    auto start_time = std::chrono::steady_clock::now();
-    bool ok = false;
-    try
-    {
-        // ── PreRequest phase (middleware) ──
-        auto resp = middleware_.ExecutePre(ctx);
-        if (resp.IsNone()) {
-            // Match 捕获路径参数并注入 ctx，handler 通过 ctx.Param() 获取
-            std::vector<std::pair<std::string_view, std::string_view>> params;
-            auto* handler = router_.Match(ctx.Path(), &params);
-            ctx.SetParams(params);
-            if (handler && handler->IsStream()) {
-                // ── 流式路径 ──
-                auto sse_resp = Response::SSEStream(ctx.Region(), 0);
-                WriteResponseHeaders(stream_id, sse_resp);
-                {
-                    auto init = SseInitialPayload(metrics_);
-                    WriteData(stream_id,
-                        reinterpret_cast<const uint8_t*>(init.data()),
-                        init.size(), false);
-                    co_await FlushOutput();
-                }
-                H2StreamWriter sink(*this, stream_id);
-                co_await handler->HandleStream(ctx, sink);
-                sink.End();
-                co_await FlushOutput();
-                ok = true;
-                goto cleanup;
-            } else if (handler && handler->IsAsync()) {
-                resp = co_await handler->HandleAsync(ctx);
-            } else if (handler) {
-                resp = handler->Handle(ctx);
-            } else {
-                resp = Response::Error(404, ctx.Region());
-            }
-        }
-
-        if (ctx.ws_extended_) {
-            std::vector<std::pair<std::string_view, std::string_view>> ws_params;
-            auto* ws_handler = router_.Match(ctx.Path(), &ws_params);
-            ctx.SetParams(ws_params);
-            // 仅 handler 声明直接处理 WS upgrade 时才透传；否则（如静态文件
-            // 兜底）直接拒绝，避免把非 WS handler 当 WS 用导致流挂起。
-            if (ws_handler && ws_handler->IsWebSocketUpgradeHandler()) {
-                // RFC 8441 Extended CONNECT: response uses 2xx status.
-                // No Sec-WebSocket-Accept — protocol switch is implicit via :protocol.
-                std::vector<std::pair<std::string_view, std::string_view>> ws_headers;
-                ws_headers.emplace_back(":status", "200");
-                ws_headers.emplace_back("date", CachedDate());
-
-                auto hpack = hpack_encoder_.Encode(ws_headers);
-                WriteHeaders(stream_id, hpack, true);
-                co_await FlushOutput();
-
-                // ── Spawn WS handler on independent coroutine ──
-                ctx.ws_active_ = true;
-
-                auto conn = std::make_shared<H2WsConnection>(
-                    output_, stream_id, ctx, loop_,
-                    [this]() -> coro::Task<bool> {
-                        co_return co_await FlushOutput();
-                    });
-
-                auto h2self = std::static_pointer_cast<H2Session>(
-                    this->shared_from_this());
-
-                // 立即调用的 lambda 协程闭包是临时对象，spawn 后协程长期挂起，
-                // 闭包销毁 → this/捕获悬垂（GCC 侥幸、clang 必崩）；提为静态成员
-                // 协程 RunWsHandler，h2self/conn 按值（shared_ptr 拷贝）进帧，挂起安全。
-                coro::Task<void> ws_task =
-                    RunWsHandler(h2self, stream_id, std::move(conn), ws_handler);
-                net::spawn(std::move(ws_task), loop_);
-
-                ok = true;
-                co_return;  // skip cleanup — stream stays alive for spawned task
-            }
-
-            // No handler — reject
-            WriteRstStream(stream_id, H2Error::REFUSED_STREAM);
-            co_await FlushOutput();
-            streams_.erase(stream_id);
-            stream_mgr_.RemoveStream(stream_id);
-            flow_control_.RemoveStream(stream_id);   // 两本账一并清理，避免映射无界增长
-            co_return;
-        }
-
-        const size_t body_len = co_await H2StreamProcessor(*this, stream_id)
-                                    .WriteResponse(ctx, resp);
-
-        // ── Post-handle: record metrics ──
-        if (!resp.IsStream()) {
-            auto end = std::chrono::steady_clock::now();
-            auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
-                               end - start_time).count();
-            middleware_.ExecutePostSync(ctx, resp.StatusCode(),
-                                        body_len, elapsed, worker_id_);
-        }
-        ok = true;
-    }
-    catch (std::exception& e)
-    {
-        std::cerr << "[h2] handler error (stream " << stream_id
-                  << "): " << e.what() << std::endl;
-        WriteRstStream(stream_id, H2Error::INTERNAL_ERROR);
-    }
-
-cleanup:
-    // Flush (error response or final data)
-    if (!ok) {
-        co_await FlushOutput();
-    }
-
-    // Clean up stream context
-    streams_.erase(stream_id);
-    stream_mgr_.RemoveStream(stream_id);
-    flow_control_.RemoveStream(stream_id);   // 两本账一并清理，避免映射无界增长
-
-    co_return;
+    auto self = std::static_pointer_cast<H2Session>(shared_from_this());
+    co_await H2StreamProcessor(std::move(self), stream_id).Run();
 }

@@ -2,7 +2,6 @@
 #include "handler/request_handler.hpp"
 #include "server/session_base.hpp"
 #include "protocol/http2/stream_context.hpp"
-#include "server/ws_connection_h2.hpp"
 #include "protocol/http2/parser/BFL.hpp"
 #include "protocol/http2/parser/HPACK.hpp"
 #include "protocol/http2/parser/h2_frame_encoder.hpp"
@@ -16,10 +15,12 @@
 #include <vector>
 #include <array>
 #include <memory>
+#include <string_view>
 
 class RegionPool;
 class H2StreamWriter;
 class H2StreamProcessor;
+class H2WsStream;
 
 // ── H2Session ──
 //
@@ -56,8 +57,10 @@ public:
     coro::Task<void> Start() override;
 
 private:
+    struct SendWaitAwaiter;
     friend class H2StreamWriter;
     friend class H2StreamProcessor;
+    friend class H2WsStream;
     // ── Core ──
     net::TlsStream socket_;
     coro::EventLoop& loop_;   // 构造时取自 coro::EventLoop::current()（worker loop）
@@ -77,6 +80,8 @@ private:
     std::vector<uint8_t> output_;
     H2FrameEncoder frame_enc_{output_};
     bool flushing_ = false;
+    bool send_wakeup_posted_ = false;
+    static constexpr int64_t kSendWindowTimeoutMs = 30000;
 
     // ── Local settings (advertised to peer) ──
     H2Settings local_settings_;
@@ -117,7 +122,7 @@ private:
     // 处理 GOAWAY：标记对端关闭
     // 参数：hdr - 帧头；payload - 帧负载
     void OnGoAway(const H2FrameHeader& hdr, const uint8_t* payload);
-    // 处理 WINDOW_UPDATE：MVP 仅记录
+    // 处理 WINDOW_UPDATE：补发送账并唤醒受阻写协程
     // 参数：hdr - 帧头；payload - 帧负载
     void OnWindowUpdate(const H2FrameHeader& hdr, const uint8_t* payload);
     // 处理 PRIORITY：忽略
@@ -131,9 +136,6 @@ private:
     // 追加 HEADERS 帧
     // 参数：sid - 流 ID；hpack - 已编码 HPACK 块；end_headers - 是否 END_HEADERS
     void WriteHeaders(int32_t sid, const std::vector<uint8_t>& hpack, bool end_headers);
-    // 追加 DATA 帧（按帧长上限分帧）
-    // 参数：sid - 流 ID；data - 负载；len - 长度；end_stream - 是否 END_STREAM
-    void WriteData(int32_t sid, const uint8_t* data, size_t len, bool end_stream);
     // 追加 RST_STREAM 帧
     // 参数：sid - 流 ID；err - 错误码
     void WriteRstStream(int32_t sid, H2Error err);
@@ -155,8 +157,21 @@ private:
 
     MetricsCollector* MetricsForStreamProcessor() const { return metrics_; }
 
+    // 流层唯一的数据发送入口：Session 协调流控、组帧和刷出。
+    coro::Task<bool> SendData(int32_t sid, std::string_view data);
+    // 追加空 DATA + END_STREAM，并确保输出已刷出；不消耗发送窗口。
+    coro::Task<void> EndStream(int32_t sid);
+    // 等待本流获得发送额度或收到终止信号；超时由实现方处理。
+    coro::Task<bool> WaitForSendable(int32_t sid);
+    bool StreamWritable(int32_t sid) const;
+    void FinishStream(int32_t sid);
+
     /// 唤醒挂起等待中的 WS 协程（数据/关闭到达时由推送侧调用）。
     void WakeWsStream(H2StreamContext& ctx);
+    /// 唤醒一个等待发送窗口的流协程。
+    void WakeSendStream(H2StreamContext& ctx, H2SendWakeReason reason);
+    /// 广播连接终止，唤醒所有等待中的流协程。
+    void WakeAllStreams(H2SendWakeReason reason);
 
     // ── I/O ──
     // 把 output_ 缓冲写入 socket
@@ -170,12 +185,4 @@ private:
     // 处理单条 HTTP/2 请求流（中间件→路由→响应，支持 SSE/WS）
     // 参数：stream_id - 待处理的流 ID
     coro::Task<void> HandleStream(int32_t stream_id);
-    coro::Task<void> ProcessStream(int32_t stream_id);
-    // 独立并发运行的 WS 处理器协程，结束后清理流状态
-    // 参数：h2self - 会话自身；stream_id - WS 流 ID；conn - H2 WS 连接；ws_handler - WS 处理器
-    // WS 处理器协程（原为立即调用 lambda 协程，闭包悬垂 → 提为静态成员，
-    // 参数按值进帧，h2self/conn 为 shared_ptr 拷贝，挂起期间始终存活）
-    static coro::Task<void> RunWsHandler(
-        std::shared_ptr<H2Session> h2self, int32_t stream_id,
-        std::shared_ptr<H2WsConnection> conn, RequestHandler* ws_handler);
 };

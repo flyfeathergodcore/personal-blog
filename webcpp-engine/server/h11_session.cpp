@@ -377,7 +377,6 @@ coro::Task<void> H11Session<Stream>::Send(Response response)
 
         int push_ms = response.PushIntervalMs();
         SsePushState sse;
-        sse.Init(metrics_);
 
         for (;;)
         {

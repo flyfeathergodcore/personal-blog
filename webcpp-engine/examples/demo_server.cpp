@@ -47,7 +47,7 @@ public:
             if (!(co_await sink.PushSSE("tick=" + std::to_string(i)))) break;
             co_await coro::sleep_for(100);
         }
-        sink.End();
+        co_await sink.End();
         co_return;
     }
 };

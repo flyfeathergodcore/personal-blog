@@ -1,13 +1,11 @@
 #pragma once
 #include "server/ws_connection.hpp"
+#include "server/h2_stream_writer.hpp"
 #include "protocol/http2/stream_context.hpp"
-#include "protocol/http2/parser/BFL.hpp"
 #include "coro/task.h"
 #include "coro/event_loop.h"
 #include <deque>
 #include <memory>
-#include <functional>
-#include <cstring>
 #include <coroutine>
 
 // ═══════════════════════════════════════════════════════════════════
@@ -15,11 +13,8 @@
 //
 // Implements WsConnectionBase for H2 Extended CONNECT streams.
 //   - Read()  dequeues from H2StreamContext::ws_data_queue_
-//   - Send()  builds a DATA frame directly into the session output buffer
-//   - Close() sends END_STREAM via DATA frame with close code
-//
-// Frame building: uses BFL functions (EncodeFrameHeader) and pushes
-// raw bytes into the session's output buffer, then calls the flusher.
+//   - Send()/Close() route all DATA through H2StreamWriter
+//   - writer handles flow-control, frame encoding, and flushing coordination
 //
 // 唤醒机制（coro 版）：
 //   等待侧（Read 内的 WakeAwaiter）调用 loop_->wait_timer_cancelable(...) 挂起，
@@ -32,18 +27,13 @@
 class H2WsConnection : public WsConnectionBase,
                        public std::enable_shared_from_this<H2WsConnection> {
 public:
-    using Flusher = std::function<coro::Task<bool>()>;
-
-    // 构造函数：绑定会话输出缓冲、流上下文与刷新回调，注册唤醒引用
-    // 参数：output - 会话输出缓冲引用；stream_id - H2 流 ID；ctx - 流上下文；loop - 事件循环；flusher - 刷新回调
-    H2WsConnection(std::vector<uint8_t>& output, int32_t stream_id,
-                   H2StreamContext& ctx, coro::EventLoop& loop,
-                   Flusher flusher)
-        : output_(output)
-        , stream_id_(stream_id)
+    // 构造函数：绑定流写入门面、流上下文与事件循环，注册唤醒引用
+    // 参数：writer - 流级写入门面；ctx - 流上下文；loop - 事件循环
+    H2WsConnection(H2StreamWriter writer, H2StreamContext& ctx,
+                   coro::EventLoop& loop)
+        : writer_(std::move(writer))
         , ctx_(ctx)
         , loop_(loop)
-        , flusher_(std::move(flusher))
     {
         ctx_.ws_wakeup_.loop = &loop_;
     }
@@ -116,21 +106,15 @@ public:
 
         (void)opcode;  // H2 DATA 帧携带原始应用数据，无 WS opcode
 
-        uint8_t flags = fin ? H2Flags::END_STREAM : 0;
-        size_t pos = output_.size();
-        output_.resize(pos + kFrameHeaderSize + payload.size());
-        EncodeFrameHeader(output_.data() + pos,
-            {static_cast<uint32_t>(payload.size()), H2FrameType::DATA, flags, static_cast<uint32_t>(stream_id_)});
-        if (!payload.empty())
-            std::memcpy(output_.data() + pos + kFrameHeaderSize, payload.data(), payload.size());
-
+        if (!(co_await writer_.Write(payload))) {
+            closed_ = true;
+            co_return;
+        }
         if (fin) {
+            co_await writer_.End();
             ctx_.ws_closed_ = true;
             closed_ = true;
         }
-
-        if (flusher_)
-            co_await flusher_();
         co_return;
     }
 
@@ -148,16 +132,8 @@ public:
         payload.push_back(static_cast<char>(code & 0xFF));
         payload.append(reason);
 
-        size_t pos = output_.size();
-        output_.resize(pos + kFrameHeaderSize + payload.size());
-        EncodeFrameHeader(output_.data() + pos,
-            {static_cast<uint32_t>(payload.size()), H2FrameType::DATA,
-             H2Flags::END_STREAM, static_cast<uint32_t>(stream_id_)});
-        if (!payload.empty())
-            std::memcpy(output_.data() + pos + kFrameHeaderSize, payload.data(), payload.size());
-
-        if (flusher_)
-            co_await flusher_();
+        co_await writer_.Write(payload);
+        co_await writer_.End();
         co_return;
     }
 
@@ -173,12 +149,19 @@ public:
     /// Whether the connection is marked closed.
     bool IsClosed() const { return closed_; }
 
+    /// End the HTTP/2 stream after a handler returns without closing it.
+    coro::Task<void> Finish() {
+        if (!closed_) {
+            co_await writer_.End();
+            closed_ = true;
+        }
+        co_return;
+    }
+
 private:
     static constexpr int64_t kWakeupPollMs = 100;
 
-    std::vector<uint8_t>& output_;
-    int32_t stream_id_;
+    H2StreamWriter writer_;
     H2StreamContext& ctx_;
     coro::EventLoop& loop_;
-    Flusher flusher_;
 };

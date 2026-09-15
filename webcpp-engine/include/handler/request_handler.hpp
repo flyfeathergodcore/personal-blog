@@ -165,7 +165,7 @@ public:
     }
 
     /// 关闭流
-    virtual void End() = 0;
+    virtual coro::Task<void> End() = 0;
 
     /// 客户端是否已断开
     virtual bool IsDisconnected() const = 0;
@@ -177,5 +177,5 @@ inline coro::Task<void> RequestHandler::HandleStream(
     const Context& ctx, StreamSink& sink) {
     auto resp = co_await HandleAsync(ctx);
     co_await sink.Write(resp.BodyWire());
-    sink.End();
+    co_await sink.End();
 }

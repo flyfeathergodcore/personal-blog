@@ -11,6 +11,7 @@ public:
     explicit H2FrameEncoder(std::vector<uint8_t>& output) : output_(output) {}
 
     void SetPeerMaxFrameSize(uint32_t size);
+    uint32_t PeerMaxFrameSize() const { return peer_max_frame_size_; }
     void AppendSettings(const uint8_t* payload, size_t len);
     void AppendSettingsAck();
     void AppendHeaders(int32_t stream_id, const std::vector<uint8_t>& block, bool end_headers);

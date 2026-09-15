@@ -192,23 +192,12 @@ public:
     // 渲染全量指标 JSON（/metrics.json 用）
     std::string RenderMetricsJson() const;
 
-    /// SSE: render the latest ring entry as a compact JSON line.
-    /// Returns empty string if no data since @a since_ts.
-    std::string RenderLatestSnapshot(int64_t since_ts) const;
-
-    /// SSE: render fired alerts (delta since last push).
-    /// Empty string if no alert state transition.
-    std::string RenderAlertDelta(const std::vector<AlertState>& prev) const;
-
     // ── Accessors ──
 
     // 返回当前活动连接数（全 worker 求和）
     uint64_t ActiveConnections() const;
     // 返回当前时间戳（unix 秒）
     int64_t  CurrentTimestamp() const;
-
-    /// Timestamp of the most recently flushed ring slot.
-    int64_t  LastFlushTimestamp() const;
 
     /// 聚合最近 ≤60s 有数据的 slot 到 StatsWindow；窗口全 0（无访问）返回 false
     bool SumLast60s(StatsWindow& out) const;

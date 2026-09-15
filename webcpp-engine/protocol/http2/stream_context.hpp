@@ -7,6 +7,7 @@
 #include <deque>
 #include <memory>
 #include <cstddef>
+#include <coroutine>
 #include "coro/event_loop.h"
 
 // ── H2WsWakeup ──
@@ -24,6 +25,21 @@
 struct H2WsWakeup {
     coro::EventLoop* loop = nullptr;   // 等待侧所在事件循环；nullptr = 无等待者
     std::size_t timer_id = 0;          // 可取消定时器 id；0 = 未注册
+};
+
+// H2 流发送窗口等待通道。一个流同一时刻只允许一个写协程等待额度。
+enum class H2SendWakeReason : uint8_t {
+    None,
+    Window,
+    Terminated,
+    Timeout,
+};
+
+struct H2SendWakeup {
+    coro::EventLoop* loop = nullptr;
+    std::size_t timer_id = 0;
+    std::coroutine_handle<> waiter{};
+    H2SendWakeReason reason = H2SendWakeReason::None;
 };
 
 // ── H2StreamContext ──
@@ -98,6 +114,7 @@ public:
     bool ws_closed_ = false;      // true when WS close initiated
     std::deque<std::string> ws_data_queue_;   // filled by OnDataChunk, drained by H2WsConnection
     H2WsWakeup ws_wakeup_;                    // 唤醒机制：WS 协程等待、session 推送侧唤醒
+    H2SendWakeup send_wakeup_;                // 发送窗口等待、Session 推送侧唤醒
 
     // ── Body size tracking ──
     size_t content_length_ = 0;

@@ -468,21 +468,6 @@ std::string MetricsCollector::RenderMetricsJson() const
     return json;
 }
 
-// ═══════════════════════════════════════════════════════════════
-// SSE delta rendering (single latest entry)
-// ═══════════════════════════════════════════════════════════════
-
-// 返回环形缓冲中最近一次刷屏的时间戳（无数据返回 0）
-int64_t MetricsCollector::LastFlushTimestamp() const
-{
-    int64_t best = 0;
-    for (int i = 0; i < kRingHistory; i++) {
-        auto ts = ring_[i].timestamp;
-        if (ts > best) best = ts;
-    }
-    return best;
-}
-
 // 汇总最近 60s 指标窗口供落库（site_stats）：该分钟无访问则返回 false 跳过
 // 参数：out - 汇总输出（含真实系统时钟时间戳）；返回是否有有效数据
 bool MetricsCollector::SumLast60s(StatsWindow& out) const
@@ -525,82 +510,6 @@ bool MetricsCollector::SumLast60s(StatsWindow& out) const
     out.act_max = act_max;
     // 该分钟确实无任何访问则跳过落库（避免凌晨刷空行）
     return out.req != 0 || out.err != 0;
-}
-
-// 渲染最近一次刷屏快照的 JSON（供 SSE 增量推送），无新数据返回空串
-// 参数：since_ts - 上次推送时间戳，仅当最新刷屏晚于它时返回
-std::string MetricsCollector::RenderLatestSnapshot(int64_t since_ts) const
-{
-    // Find the most recently flushed slot (highest timestamp),
-    // rather than indexing by current_time % kRingHistory, which
-    // can miss flushes that land on a different slot.
-    int best_slot = -1;
-    int64_t best_ts = -1;
-    for (int i = 0; i < kRingHistory; i++) {
-        auto ts = ring_[i].timestamp;
-        if (ts > best_ts) {
-            best_ts = ts;
-            best_slot = i;
-        }
-    }
-
-    if (best_slot < 0 || best_ts <= since_ts) return {};
-
-    auto& s = ring_[best_slot];
-    auto per = ComputePercentiles(s.total.latency_buckets);
-    uint64_t act = ActiveConnections();
-
-    std::string j;
-    j += "{\"t\":";
-    j += std::to_string(s.timestamp);
-    j += ",\"qps\":";
-    j += std::to_string(s.total.request_count);
-    j += ",\"qps_h1\":";
-    j += std::to_string(s.total.request_h1);
-    j += ",\"qps_h2\":";
-    j += std::to_string(s.total.request_h2);
-    j += ",\"err\":";
-    j += std::to_string(s.total.error_count);
-    j += ",\"err_h1\":";
-    j += std::to_string(s.total.error_h1);
-    j += ",\"err_h2\":";
-    j += std::to_string(s.total.error_h2);
-    j += ",\"bytes\":";
-    j += std::to_string(s.total.bytes_sent);
-    j += ",\"p50\":";
-    j += std::to_string(per.p50);
-    j += ",\"p90\":";
-    j += std::to_string(per.p90);
-    j += ",\"p99\":";
-    j += std::to_string(per.p99);
-    j += ",\"act\":";
-    j += std::to_string(act);
-    j += "}";
-    return j;
-}
-
-// ═══════════════════════════════════════════════════════════════
-// SSE: fired alerts delta
-// ═══════════════════════════════════════════════════════════════
-
-// 渲染告警状态变化的 SSE delta（仅输出触发状态发生变化且新近触发的告警）
-// 参数：prev - 上一次的告警状态列表；返回 SSE 文本（无变化则为空串）
-std::string MetricsCollector::RenderAlertDelta(
-    const std::vector<AlertState>& prev) const
-{
-    std::string out;
-    for (size_t i = 0; i < alert_states_.size(); i++)
-    {
-        bool changed = (i >= prev.size())
-                     || (alert_states_[i].firing != prev[i].firing);
-        if (!changed) continue;
-
-        if (!out.empty()) out += "\n";
-        out += "event: alert\ndata: ";
-        out += alert_states_[i].ToJson(0.0);
-        out += "\n";
-    }
-    return out;
 }
 
 // ═══════════════════════════════════════════════════════════════

@@ -15,8 +15,7 @@ project(webcpp_engine LANGUAGES CXX C)
 #   config/     YAML 配置加载
 #   log/        结构化日志
 #
-# 外部依赖：coro（独立协程库）、OpenSSL、yaml-cpp、Threads、dl
-# 无 grpc / sqlite / nghttp2 / asio 依赖。
+# 外部依赖：coro（独立协程库）、OpenSSL、yaml-cpp、nghttp2、Threads、dl。
 # ═══════════════════════════════════════════════════════════════
 
 # ── Release build with optimizations ──
@@ -50,6 +49,8 @@ endif()
 find_package(Threads REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(OpenSSL REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(NGHTTP2 REQUIRED IMPORTED_TARGET libnghttp2)
 
 # ── Engine source list ──
 set(WEBCPP_ENGINE_SOURCES
@@ -62,6 +63,7 @@ set(WEBCPP_ENGINE_SOURCES
     server/h2_session.cpp
     server/h2_stream_writer.cpp
     server/h2_stream_processor.cpp
+    server/h2_ws_stream.cpp
     protocol/response.cpp
     protocol/region_pool.cpp
     protocol/session_region.cpp
@@ -141,14 +143,11 @@ endif()
 # 需在本块显式补 MARIADB_CONNECTOR_C/MARIADB_ASYNC（后者须在 #include <mysql/mysql.h>
 # 前生效，使 mysql_*_start/cont 声明可见）。
 set(MYSQL_IS_MARIADB OFF)
-find_package(PkgConfig QUIET)
-if(PkgConfig_FOUND)
-    pkg_check_modules(MARIADB QUIET libmariadb)
-    if(MARIADB_FOUND)
-        set(MYSQL_INCLUDE_DIR ${MARIADB_INCLUDE_DIRS})
-        set(MYSQL_LIBRARY ${MARIADB_LIBRARIES})
-        set(MYSQL_IS_MARIADB ON)
-    endif()
+pkg_check_modules(MARIADB QUIET libmariadb)
+if(MARIADB_FOUND)
+    set(MYSQL_INCLUDE_DIR ${MARIADB_INCLUDE_DIRS})
+    set(MYSQL_LIBRARY ${MARIADB_LIBRARIES})
+    set(MYSQL_IS_MARIADB ON)
 endif()
 if(NOT MYSQL_IS_MARIADB)
     find_path(MYSQL_INCLUDE_DIR NAMES mysql/mysql.h)
@@ -213,6 +212,13 @@ target_include_directories(stream_manager_test PRIVATE ${CMAKE_CURRENT_SOURCE_DI
 add_executable(h2_frame_reader_test test/h2_frame_reader_test.cpp)
 target_include_directories(h2_frame_reader_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(h2_frame_reader_test PRIVATE webcpp_engine)
+
+# ── HTTP/2 端到端测试：进程内 TLS 服务端 + nghttp2 客户端 ──
+add_executable(h2_e2e_test test/h2_e2e_test.cpp)
+target_include_directories(h2_e2e_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(h2_e2e_test PRIVATE webcpp_engine PkgConfig::NGHTTP2)
+enable_testing()
+add_test(NAME h2_e2e_test COMMAND h2_e2e_test)
 
 # 引擎根目录 + include/ 作为 include 根，使消费方可用 #include "net/..." /
 # #include "handler/..." 等相对路径（内置 handler 头文件已迁入 include/）。

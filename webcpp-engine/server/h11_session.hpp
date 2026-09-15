@@ -81,7 +81,7 @@ public:
 
     // 结束流：标记断开，后续 Write 直接返回失败
     // 参数：无
-    void End() override { disconnected_ = true; }
+    coro::Task<void> End() override { disconnected_ = true; co_return; }
 
     // 查询流是否已断开
     // 参数：无；返回：是否断开
