@@ -6,24 +6,24 @@
 
 // 处理客户端发起的 HEADERS：校验流 ID 必须为奇数、单调递增且未超过并发上限。
 // 参数：stream_id - 新流的 ID；返回 true 表示接受，false 表示协议错误
-bool H2StreamManager::OnStreamOpen(int32_t stream_id)
+H2StreamManager::OpenResult H2StreamManager::OnStreamOpen(int32_t stream_id)
 {
     // Client-initiated streams MUST have odd IDs
     if ((stream_id & 1) == 0)
-        return false;
+        return OpenResult::ProtocolError;
 
     // Stream IDs MUST monotonically increase (no reuse)
     if (stream_id <= last_client_stream_id_)
-        return false;
+        return OpenResult::ProtocolError;
 
     // Must not exceed max concurrent streams
     if (active_count_ >= max_concurrent_)
-        return false;
+        return OpenResult::Refused;
 
     last_client_stream_id_ = stream_id;
     states_[stream_id] = H2StreamState::Open;
     active_count_++;
-    return true;
+    return OpenResult::Accepted;
 }
 
 // 处理客户端 END_STREAM：将 open 状态流转为 half_closed_remote。

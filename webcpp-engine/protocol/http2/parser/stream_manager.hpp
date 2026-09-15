@@ -29,6 +29,7 @@ enum class H2StreamState : uint8_t {
 
 class H2StreamManager {
 public:
+    enum class OpenResult : uint8_t { Accepted, ProtocolError, Refused };
     // 默认构造函数。
     H2StreamManager() = default;
 
@@ -36,7 +37,7 @@ public:
 
     /// 客户端发起的新流 HEADERS 到达：校验流 ID（奇数、单调递增）。
     /// 协议错误返回 false。
-    bool OnStreamOpen(int32_t stream_id);
+    OpenResult OnStreamOpen(int32_t stream_id);
 
     /// 客户端在 HEADERS 或 DATA 上设置 END_STREAM。
     void OnStreamEndStream(int32_t stream_id);

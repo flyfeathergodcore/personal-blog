@@ -34,6 +34,7 @@ H2Session::H2Session(net::TlsStream stream,
 
     // Advertise ENABLE_CONNECT_PROTOCOL (RFC 8441 WebSocket)
     local_settings_.enable_connect_protocol = 1;
+    local_settings_.max_concurrent_streams = stream_mgr_.MaxConcurrent();
 }
 
 // 析构函数：默认实现，协程生命周期由 shared_ptr 管理
@@ -220,7 +221,15 @@ void H2Session::OnSettings(const H2FrameHeader& hdr, const uint8_t* payload)
     if (s.max_concurrent_streams)
         peer_max_concurrent_ = *s.max_concurrent_streams;
 
+    if (s.header_table_size)
+        hpack_decoder_.SetMaxTableSize(*s.header_table_size);
+
     if (s.initial_window_size) {
+        if (*s.initial_window_size > 0x7fffffffU) {
+            WriteGoAway(stream_mgr_.LastClientStreamId(), H2Error::FLOW_CONTROL_ERROR);
+            goaway_sent_ = true;
+            return;
+        }
         // 对端 SETTINGS 的 INITIAL_WINDOW_SIZE 作用于【我方发送账】，与接收账无关。
         // SetPeerInitialWindow 只调整流级发送窗口，不碰接收账，因此不会再触到
         // ShouldUpdate 的补充阈值 —— 旧实现正是因为这个才绕开它（见附录 A 的 B18）。
@@ -252,9 +261,15 @@ void H2Session::OnHeaders(const H2FrameHeader& hdr, const uint8_t* payload)
 {
     int32_t sid = hdr.stream_id;
 
-    // Validate stream
-    if (!stream_mgr_.OnStreamOpen(sid)) {
-        WriteRstStream(sid, H2Error::REFUSED_STREAM);
+    // ID violations are connection errors; only the concurrency limit is stream-local.
+    auto open_result = stream_mgr_.OnStreamOpen(sid);
+    if (open_result != H2StreamManager::OpenResult::Accepted) {
+        if (open_result == H2StreamManager::OpenResult::ProtocolError) {
+            WriteGoAway(stream_mgr_.LastClientStreamId(), H2Error::PROTOCOL_ERROR);
+            goaway_sent_ = true;
+        } else {
+            WriteRstStream(sid, H2Error::REFUSED_STREAM);
+        }
         return;
     }
 
@@ -355,6 +370,11 @@ void H2Session::OnContinuation(const H2FrameHeader& hdr, const uint8_t* payload)
 void H2Session::OnData(const H2FrameHeader& hdr, const uint8_t* payload)
 {
     int32_t sid = hdr.stream_id;
+    if (sid == 0) {
+        WriteGoAway(stream_mgr_.LastClientStreamId(), H2Error::PROTOCOL_ERROR);
+        goaway_sent_ = true;
+        return;
+    }
 
     // Find stream context
     auto it = streams_.find(sid);
@@ -368,8 +388,15 @@ void H2Session::OnData(const H2FrameHeader& hdr, const uint8_t* payload)
     size_t data_off = DataOffset(hdr);
     size_t data_len = DataLength(hdr, payload);
 
-    // Flow control: consume bytes from window
-    auto actual_len = static_cast<uint32_t>(data_len);
+    // Reject DATA that exceeds either stream or connection receive credit.
+    // RFC 7540 §6.9.1 counts the complete DATA payload, including Pad Length
+    // and Padding. DataLength deliberately excludes those bytes for body parsing.
+    auto actual_len = hdr.length;
+    if (actual_len > flow_control_.RecvWindow(sid)) {
+        WriteGoAway(stream_mgr_.LastClientStreamId(), H2Error::FLOW_CONTROL_ERROR);
+        goaway_sent_ = true;
+        return;
+    }
     // 只调一次：连接账在 ConsumeRecv 内部一并扣。
     // （此处原本还有一行 ConsumeRecv(0, ...)，导致连接级 WINDOW_UPDATE 的
     //  增量翻倍，对端连接窗口无界膨胀 —— 见设计文档附录 A 的 B1。）
@@ -483,16 +510,30 @@ void H2Session::OnGoAway(const H2FrameHeader& hdr, const uint8_t* payload)
 // WINDOW_UPDATE (type 8)
 // ═══════════════════════════════════════════════════════════════
 
-// 处理 WINDOW_UPDATE：MVP 仅记录不反应（响应通常落在窗口内）
+// 处理 WINDOW_UPDATE：将对端释放的额度记入发送侧账本。
 // 参数：hdr - 帧头；payload - 帧负载
 void H2Session::OnWindowUpdate(const H2FrameHeader& hdr, const uint8_t* payload)
 {
-    // Peer is telling us it has consumed data we sent.
-    // For a server (mostly sender of response data), this is
-    // mainly relevant if we're sending large bodies or SSE data.
-    // MVP: track but don't react (responses typically fit in window).
-    (void)hdr;
-    (void)payload;
+    if (hdr.length != 4) {
+        WriteGoAway(stream_mgr_.LastClientStreamId(), H2Error::FRAME_SIZE_ERROR);
+        goaway_sent_ = true;
+        return;
+    }
+
+    const uint32_t increment = ((static_cast<uint32_t>(payload[0]) << 24)
+                              | (static_cast<uint32_t>(payload[1]) << 16)
+                              | (static_cast<uint32_t>(payload[2]) << 8)
+                              | static_cast<uint32_t>(payload[3])) & 0x7fffffffU;
+    if (increment == 0) {
+        WriteGoAway(stream_mgr_.LastClientStreamId(), H2Error::PROTOCOL_ERROR);
+        goaway_sent_ = true;
+        return;
+    }
+
+    if (!flow_control_.AddSendCredit(hdr.stream_id, increment)) {
+        WriteGoAway(stream_mgr_.LastClientStreamId(), H2Error::FLOW_CONTROL_ERROR);
+        goaway_sent_ = true;
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════

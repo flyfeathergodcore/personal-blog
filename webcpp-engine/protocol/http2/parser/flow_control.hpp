@@ -69,7 +69,7 @@ public:
 
     /// 收到对端 WINDOW_UPDATE：为该实体补充 n 字节发送额度。
     /// 参数：stream_id - 流 ID（0 = 连接级）；n - 增量
-    void AddSendCredit(uint32_t stream_id, uint32_t n);
+    bool AddSendCredit(uint32_t stream_id, uint32_t n);
 
     // ── SETTINGS ──
 

@@ -1,5 +1,6 @@
 #include "protocol/http2/parser/flow_control.hpp"
 #include <algorithm>
+#include <limits>
 
 // ═══════════════════════════════════════════════════════════════
 // 生命周期
@@ -157,16 +158,23 @@ void H2FlowControl::ConsumeSend(uint32_t stream_id, uint32_t n)
 
 // 收到对端 WINDOW_UPDATE：为该实体补充发送额度。
 // 参数：stream_id - 流 ID（0 = 连接级）；n - 增量
-void H2FlowControl::AddSendCredit(uint32_t stream_id, uint32_t n)
+bool H2FlowControl::AddSendCredit(uint32_t stream_id, uint32_t n)
 {
+    auto add = [n](int32_t& credit) {
+        const auto next = static_cast<int64_t>(credit) + n;
+        if (next > std::numeric_limits<int32_t>::max())
+            return false;
+        credit = static_cast<int32_t>(next);
+        return true;
+    };
+
     if (stream_id == 0) {
-        conn_send_ += static_cast<int32_t>(n);
-        return;
+        return add(conn_send_);
     }
 
     // 即便该流已关闭，也照记不误：RFC 7540 §5.1 规定流关闭后仍可能收到
     // WINDOW_UPDATE，忽略它不会出错，而创建一条孤立的账目代价极低。
-    GetOrCreateSend(stream_id) += static_cast<int32_t>(n);
+    return add(GetOrCreateSend(stream_id));
 }
 
 // ═══════════════════════════════════════════════════════════════

@@ -202,6 +202,10 @@ add_executable(flow_control_test test/flow_control_test.cpp
     protocol/http2/parser/flow_control.cpp)
 target_include_directories(flow_control_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
+add_executable(stream_manager_test test/stream_manager_test.cpp
+    protocol/http2/parser/stream_manager.cpp)
+target_include_directories(stream_manager_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
 # 引擎根目录 + include/ 作为 include 根，使消费方可用 #include "net/..." /
 # #include "handler/..." 等相对路径（内置 handler 头文件已迁入 include/）。
 # 依赖以 PUBLIC 传递，应用链接 webcpp_engine 即获得 OpenSSL/yaml-cpp/coro。

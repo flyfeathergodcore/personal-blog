@@ -222,6 +222,13 @@ static void test_remove_stream_zero_is_noop()
     CHECK(fc.RecvWindow(0) == 64535, "连接级接收账未被清掉");
 }
 
+static void test_send_credit_rejects_window_overflow()
+{
+    H2FlowControl fc;
+    CHECK(!fc.AddSendCredit(0, 0x7fffffffU),
+          "连接级发送窗口超过 2^31-1 时拒绝更新");
+}
+
 int main()
 {
     test_consume_recv_deducts_connection_once();
@@ -238,6 +245,7 @@ int main()
     test_peer_settings_do_not_touch_recv_accounts();
     test_remove_stream_clears_both_accounts();
     test_remove_stream_zero_is_noop();
+    test_send_credit_rejects_window_overflow();
 
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
