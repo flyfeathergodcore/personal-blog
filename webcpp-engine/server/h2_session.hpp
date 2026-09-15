@@ -6,6 +6,7 @@
 #include "protocol/http2/parser/BFL.hpp"
 #include "protocol/http2/parser/HPACK.hpp"
 #include "protocol/http2/parser/h2_frame_encoder.hpp"
+#include "protocol/http2/parser/h2_frame_reader.hpp"
 #include "protocol/http2/parser/stream_manager.hpp"
 #include "protocol/http2/parser/flow_control.hpp"
 #include "net/tls_stream.h"
@@ -70,9 +71,7 @@ private:
     std::unordered_map<int32_t, H2StreamContext> streams_;
 
     // ── I/O buffers ──
-    static constexpr size_t kReadBufSize = 65536;
-    std::array<uint8_t, kReadBufSize> read_buf_;
-    size_t read_buf_used_ = 0;
+    H2FrameReader frame_reader_;
     std::vector<uint8_t> output_;
     H2FrameEncoder frame_enc_{output_};
     bool flushing_ = false;

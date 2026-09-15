@@ -70,6 +70,7 @@ set(WEBCPP_ENGINE_SOURCES
     protocol/http2/stream_context.cpp
     protocol/http2/parser/HPACK.cpp
     protocol/http2/parser/h2_frame_encoder.cpp
+    protocol/http2/parser/h2_frame_reader.cpp
     protocol/http2/parser/stream_manager.cpp
     protocol/http2/parser/flow_control.cpp
     net/tcp_stream.cpp
@@ -207,6 +208,10 @@ target_include_directories(flow_control_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
 add_executable(stream_manager_test test/stream_manager_test.cpp
     protocol/http2/parser/stream_manager.cpp)
 target_include_directories(stream_manager_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+add_executable(h2_frame_reader_test test/h2_frame_reader_test.cpp)
+target_include_directories(h2_frame_reader_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(h2_frame_reader_test PRIVATE webcpp_engine)
 
 # 引擎根目录 + include/ 作为 include 根，使消费方可用 #include "net/..." /
 # #include "handler/..." 等相对路径（内置 handler 头文件已迁入 include/）。

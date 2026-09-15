@@ -75,71 +75,19 @@ coro::Task<void> H2Session::Start()
     {
         while (!goaway_received_ && !goaway_sent_)
         {
-            // ── Greedy read: accumulate all readily available data ──
-            // 注意：read_buf_used_ 保留上一轮未解析完的 partial frame 数据
-            //（解析结束时已 shift 到缓冲区头部），读入继续追加到其后，
-            // 否则 partial 数据会被下一轮覆盖，导致大请求体解析错位。
-            bool read_ok = false;
-            for (int greedy_pass = 0; greedy_pass < 2; greedy_pass++) {
-                size_t remaining = read_buf_.size() - read_buf_used_;
-                if (remaining == 0) break;
-                auto r = co_await socket_.read_some(
-                    read_buf_.data() + read_buf_used_, remaining);
-                if (!r.ok()) break;
-                read_buf_used_ += r.bytes;
-                read_ok = true;
+            if (!co_await frame_reader_.Read(socket_)) break;
 
-                if (::SSL_pending(socket_.native_handle()) <= 0)
+            for (;;) {
+                H2FrameReader::Frame frame;
+                auto result = frame_reader_.Next(kDefaultMaxFrameSize, frame);
+                if (result == H2FrameReader::NextResult::NeedMore) break;
+                if (result == H2FrameReader::NextResult::FrameTooLarge) {
+                    WriteGoAway(stream_mgr_.LastClientStreamId(), H2Error::FRAME_SIZE_ERROR);
+                    goaway_sent_ = true;
                     break;
-            }
-            if (!read_ok) break;
-
-            // ── Parse all complete frames ──
-            {
-                const uint8_t* data = read_buf_.data();
-                size_t available = read_buf_used_;
-
-                // Skip h2c client connection preface magic string if present
-                // (nghttp2 sends it even over TLS; 24 bytes before first frame)
-                if (stream_mgr_.LastClientStreamId() == 0
-                    && available >= kH2PrefaceLen)
-                {
-                    static constexpr char kMagic[] = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
-                    if (std::memcmp(data, kMagic, kH2PrefaceLen) == 0) {
-                        data += kH2PrefaceLen;
-                        available -= kH2PrefaceLen;
-                    }
                 }
-
-                while (available >= kFrameHeaderSize) {
-                    auto hdr = DecodeFrameHeader(data);
-                    // Validate frame length
-                    // 入站帧大小的基准是"我方广告给对端的接收上限"，而不是
-                    // peer_max_frame_size_（后者是 peer 对"我方发送帧"的限制，
-                    // 与对端能发多大的帧给我们无关）。我方未广告
-                    // SETTINGS_MAX_FRAME_SIZE，RFC 7540 默认 16384 即合规对端
-                    // 可发送的帧长上限，同时保证单帧不超出我方 64KB 读缓冲。
-                    if (hdr.length > kDefaultMaxFrameSize) {
-                        std::cerr << "[h2] frame too large: " << hdr.length
-                                  << " > " << kDefaultMaxFrameSize << std::endl;
-                        WriteGoAway(stream_mgr_.LastClientStreamId(),
-                                    H2Error::FRAME_SIZE_ERROR);
-                        goaway_sent_ = true;
-                        break;
-                    }
-
-                    size_t frame_size = kFrameHeaderSize + hdr.length;
-                    if (frame_size > available) break;  // incomplete frame
-
-                    ProcessFrame(hdr, data + kFrameHeaderSize);
-                    data += frame_size;
-                    available -= frame_size;
-                }
-
-                // Shift remaining partial data to front of buffer
-                if (data != read_buf_.data() && available > 0)
-                    std::memmove(read_buf_.data(), data, available);
-                read_buf_used_ = available;
+                ProcessFrame(frame.header, frame.payload);
+                frame_reader_.Consume(frame);
             }
 
             if (goaway_sent_) break;
