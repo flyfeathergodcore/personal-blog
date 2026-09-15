@@ -22,7 +22,7 @@ class H2StreamWriter;
 // ── H2Session ──
 //
 // HTTP/2 会话（RFC 7540，TLS/ALPN），跑在 coro/net 协程原语之上（Task 10 移植）。
-// 移除了 asio：stream_ 用 net::TlsStream；exec_ 换成 loop_（worker 事件循环引用）；
+// 移除了 asio：socket_ 用 net::TlsStream；exec_ 换成 loop_（worker 事件循环引用）；
 // 所有 async_* 换成 coro 读写；WS 并发用 net::spawn(loop_)。
 //
 // HTTP/2 session over TLS (h2).  Uses our custom H2 stack:
@@ -57,7 +57,7 @@ public:
 private:
     friend class H2StreamWriter;
     // ── Core ──
-    net::TlsStream stream_;
+    net::TlsStream socket_;
     coro::EventLoop& loop_;   // 构造时取自 coro::EventLoop::current()（worker loop）
 
     // ── Custom H2 modules ──
@@ -75,7 +75,7 @@ private:
     size_t read_buf_used_ = 0;
     std::vector<uint8_t> output_;
     H2FrameEncoder frame_enc_{output_};
-    bool writing_ = false;
+    bool flushing_ = false;
 
     // ── Local settings (advertised to peer) ──
     H2Settings local_settings_;

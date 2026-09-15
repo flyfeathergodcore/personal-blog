@@ -27,7 +27,7 @@ H2Session::H2Session(net::TlsStream stream,
                      MiddlewareManager& middleware,
                      RegionPool* region_pool)
     : SessionBase(router, middleware)
-    , stream_(std::move(stream))
+    , socket_(std::move(stream))
     , loop_(coro::EventLoop::current())
 {
     if (region_pool)
@@ -83,13 +83,13 @@ coro::Task<void> H2Session::Start()
             for (int greedy_pass = 0; greedy_pass < 2; greedy_pass++) {
                 size_t remaining = read_buf_.size() - read_buf_used_;
                 if (remaining == 0) break;
-                auto r = co_await stream_.read_some(
+                auto r = co_await socket_.read_some(
                     read_buf_.data() + read_buf_used_, remaining);
                 if (!r.ok()) break;
                 read_buf_used_ += r.bytes;
                 read_ok = true;
 
-                if (::SSL_pending(stream_.native_handle()) <= 0)
+                if (::SSL_pending(socket_.native_handle()) <= 0)
                     break;
             }
             if (!read_ok) break;
@@ -551,12 +551,12 @@ void H2Session::OnPriority(const H2FrameHeader& hdr, const uint8_t* payload)
 // FlushOutput — drain output_ buffer to socket
 // ═══════════════════════════════════════════════════════════════
 
-// 把 output_ 缓冲写入 socket；用 writing_ 防重入，交换局部缓冲以允许 WS 协程并发追加
+// 把 output_ 缓冲写入 socket；用 flushing_ 防重入，交换局部缓冲以允许 WS 协程并发追加
 // 参数：无；返回：写入成功与否
 coro::Task<bool> H2Session::FlushOutput()
 {
-    if (writing_) co_return true;
-    writing_ = true;
+    if (flushing_) co_return true;
+    flushing_ = true;
 
     if (!output_.empty()) {
         // Swap to local buffer: spawned WS handler can safely append
@@ -564,15 +564,15 @@ coro::Task<bool> H2Session::FlushOutput()
         std::vector<uint8_t> send_buf;
         send_buf.swap(output_);
 
-        bool ok = co_await stream_.write_all(std::string_view(
+        bool ok = co_await socket_.write_all(std::string_view(
             reinterpret_cast<const char*>(send_buf.data()), send_buf.size()));
         if (!ok) {
-            writing_ = false;
+            flushing_ = false;
             co_return false;
         }
     }
 
-    writing_ = false;
+    flushing_ = false;
     co_return true;
 }
 
