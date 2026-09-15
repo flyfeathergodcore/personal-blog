@@ -123,6 +123,100 @@ static void test_should_update_below_threshold()
     CHECK(!fc.ShouldUpdate(0), "连接级同上");
 }
 
+// ── 发送账：连接窗口是所有流共用的 ──
+static void test_send_window_is_min_of_stream_and_connection()
+{
+    H2FlowControl fc;
+    fc.ConsumeSend(1, 60000);        // 流 1 扣 60000，连接也扣 60000
+
+    CHECK(fc.SendWindow(1) == 5535, "流 1 剩 5535");
+    CHECK(fc.SendWindow(0) == 5535, "连接级剩 5535");
+    CHECK(fc.SendWindow(3) == 5535, "未用过的流 3 受连接窗口限制，也是 5535");
+}
+
+// ── 发送账：补连接窗口会同时放开所有流 ──
+static void test_add_send_credit_connection_releases_all_streams()
+{
+    H2FlowControl fc;
+    fc.ConsumeSend(1, 65535);        // 连接窗口耗尽
+    CHECK(fc.SendWindow(1) == 0, "连接窗口耗尽 → 流 1 一个字节也发不出");
+    CHECK(fc.SendWindow(3) == 0, "其他流同样发不出");
+
+    fc.AddSendCredit(0, 1000);       // 只补连接
+    CHECK(fc.SendWindow(3) == 1000, "连接窗口放开后其他流可用");
+    CHECK(fc.SendWindow(1) == 0, "流 1 的【流级】窗口已耗尽，仍不可用");
+}
+
+// ── 发送账：补流窗口不影响连接，且流窗口不是瓶颈时不起作用 ──
+static void test_add_send_credit_stream_does_not_touch_connection()
+{
+    H2FlowControl fc;
+    fc.ConsumeSend(1, 10000);        // 流 1 与连接各扣 10000
+
+    fc.AddSendCredit(1, 5000);       // 只补流 1
+    CHECK(fc.SendWindow(1) == 55535,
+          "流 1 的流级账已回到 60535，但连接账仍是 55535 → 取较小值");
+    CHECK(fc.SendWindow(3) == 55535, "流 3 未补充，同样受连接窗口限制");
+
+    fc.AddSendCredit(0, 5000);       // 再补连接
+    CHECK(fc.SendWindow(1) == 60535, "两本账都放开后，流 1 才拿到 60535");
+    CHECK(fc.SendWindow(3) == 60535, "流 3 也拿到 60535");
+}
+
+// ── 发送账：SETTINGS_INITIAL_WINDOW_SIZE 只动流级，且允许压成负数（§6.9.2）──
+static void test_peer_settings_make_stream_window_negative()
+{
+    H2FlowControl fc;
+    fc.ConsumeSend(1, 1000);         // 流 1 与连接各扣 1000
+
+    fc.SetPeerInitialWindow(0);      // 对端把初始窗口降到 0
+    CHECK(fc.SendWindow(1) == 0, "流 1 窗口被压成 0，不可发");
+    CHECK(fc.SendWindow(0) == 64535, "连接级发送窗口不受 SETTINGS 影响");
+
+    fc.AddSendCredit(1, 500);        // 对端补 500
+    CHECK(fc.SendWindow(1) == 0,
+          "原窗口是 -1000，补 500 后仍为负 → 依旧不可发");
+    fc.AddSendCredit(1, 1000);       // 再补 1000
+    CHECK(fc.SendWindow(1) == 500, "补够后恢复出 500 额度");
+}
+
+// ── 发送账：SETTINGS 不触碰接收账 ──
+static void test_peer_settings_do_not_touch_recv_accounts()
+{
+    H2FlowControl fc;
+    fc.ConsumeRecv(1, 100);
+
+    fc.SetPeerInitialWindow(131072);
+    CHECK(fc.RecvWindow(1) == 65435, "接收账完全不受对端 SETTINGS 影响");
+    CHECK(fc.RecvWindow(0) == 65435, "连接级接收账同样不受影响");
+}
+
+// ── 生命周期：RemoveStream 清掉两本账 ──
+static void test_remove_stream_clears_both_accounts()
+{
+    H2FlowControl fc;
+    fc.ConsumeRecv(1, 100);
+    fc.ConsumeSend(1, 100);
+    CHECK(fc.HasStream(1), "流 1 有账目");
+
+    fc.RemoveStream(1);
+    CHECK(!fc.HasStream(1), "移除后两本账都没了");
+    // 流级账没了，RecvWindow 走未知流分支：流级按初始窗口满额 65535，
+    // 但连接账已被这次 ConsumeRecv 扣掉 100，故取 min 后是 65435 而非 65535。
+    // （这一条同时也钉住了未知流分支的 min——写成 65535 会失败。）
+    CHECK(fc.RecvWindow(1) == 65435, "接收账回落到初始满额，但仍受连接窗口约束");
+    CHECK(fc.SendWindow(0) == 65435, "连接级发送账不受影响（只扣了一次 100）");
+}
+
+// ── 生命周期：RemoveStream(0) 是空操作，不能误删连接账 ──
+static void test_remove_stream_zero_is_noop()
+{
+    H2FlowControl fc;
+    fc.ConsumeRecv(1, 1000);
+    fc.RemoveStream(0);
+    CHECK(fc.RecvWindow(0) == 64535, "连接级接收账未被清掉");
+}
+
 int main()
 {
     test_consume_recv_deducts_connection_once();
@@ -132,6 +226,13 @@ int main()
     test_recv_window_clamps_negative();
     test_pop_credit_returns_consumed_amount();
     test_should_update_below_threshold();
+    test_send_window_is_min_of_stream_and_connection();
+    test_add_send_credit_connection_releases_all_streams();
+    test_add_send_credit_stream_does_not_touch_connection();
+    test_peer_settings_make_stream_window_negative();
+    test_peer_settings_do_not_touch_recv_accounts();
+    test_remove_stream_clears_both_accounts();
+    test_remove_stream_zero_is_noop();
 
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
