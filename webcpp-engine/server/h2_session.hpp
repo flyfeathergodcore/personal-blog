@@ -19,6 +19,7 @@
 
 class RegionPool;
 class H2StreamWriter;
+class H2StreamProcessor;
 
 // ── H2Session ──
 //
@@ -32,13 +33,12 @@ class H2StreamWriter;
 //   StreamManager — stream lifecycle + pending queue
 //   FlowControl  — connection/stream window management
 //
-// Stream handling is SEQUENTIAL for normal HTTP requests: when a
-// complete request is received, the stream ID is added to a pending
-// queue and the main loop drains it one at a time via HandleStream.
+// Each complete request is dispatched to its own coroutine on the
+// connection event loop. This keeps long-lived streams from blocking
+// frame parsing for other streams.
 //
-// WebSocket (RFC 8441 Extended CONNECT) streams are handled
-// concurrently: HandleStream spawns the WS handler via net::spawn and
-// the main loop continues processing other streams + reading data.
+// WebSocket (RFC 8441 Extended CONNECT) streams keep their dedicated
+// lifecycle after the upgrade handshake.
 //
 class H2Session : public SessionBase {
 public:
@@ -57,6 +57,7 @@ public:
 
 private:
     friend class H2StreamWriter;
+    friend class H2StreamProcessor;
     // ── Core ──
     net::TlsStream socket_;
     coro::EventLoop& loop_;   // 构造时取自 coro::EventLoop::current()（worker loop）
@@ -152,6 +153,8 @@ private:
     /// Encode response headers and write HEADERS frame.
     void WriteResponseHeaders(int32_t sid, const Response& resp);
 
+    MetricsCollector* MetricsForStreamProcessor() const { return metrics_; }
+
     /// 唤醒挂起等待中的 WS 协程（数据/关闭到达时由推送侧调用）。
     void WakeWsStream(H2StreamContext& ctx);
 
@@ -159,7 +162,7 @@ private:
     // 把 output_ 缓冲写入 socket
     // 参数：无；返回：写入成功与否
     coro::Task<bool> FlushOutput();
-    // 顺序处理流待处理队列
+    // 分派待处理流到同一事件循环上的独立协程
     // 参数：无
     coro::Task<void> ProcessPending();
 
@@ -167,6 +170,7 @@ private:
     // 处理单条 HTTP/2 请求流（中间件→路由→响应，支持 SSE/WS）
     // 参数：stream_id - 待处理的流 ID
     coro::Task<void> HandleStream(int32_t stream_id);
+    coro::Task<void> ProcessStream(int32_t stream_id);
     // 独立并发运行的 WS 处理器协程，结束后清理流状态
     // 参数：h2self - 会话自身；stream_id - WS 流 ID；conn - H2 WS 连接；ws_handler - WS 处理器
     // WS 处理器协程（原为立即调用 lambda 协程，闭包悬垂 → 提为静态成员，

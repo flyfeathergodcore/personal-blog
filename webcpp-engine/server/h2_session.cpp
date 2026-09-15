@@ -1,10 +1,10 @@
 #include "server/h2_session.hpp"
 #include "server/h2_stream_writer.hpp"
+#include "server/h2_stream_processor.hpp"
 #include "protocol/region_pool.hpp"
 #include "server/sse_push.hpp"
 #include "handler/metrics.hpp"
 #include "protocol/response.hpp"
-#include "coro/awaiter.h"
 #include "net/when_all.h"
 #include <iostream>
 #include <algorithm>
@@ -12,7 +12,6 @@
 #include <cstdio>
 #include <cctype>
 #include <utility>
-#include <unistd.h>
 #include <coroutine>
 #include <openssl/ssl.h>
 
@@ -688,14 +687,17 @@ coro::Task<void> H2Session::RunWsHandler(
     h2self->streams_.erase(stream_id);
     h2self->stream_mgr_.RemoveStream(stream_id);
     h2self->flow_control_.RemoveStream(stream_id);   // 两本账一并清理，避免映射无界增长
-    if (h2self->streams_.empty())
-        h2self->Region().Reset();
     co_return;
 }
 
 // 处理单条 HTTP/2 请求流：中间件→路由→响应，支持 SSE 推送与 RFC 8441 WS 分支；末尾清理流与区域
 // 参数：stream_id - 待处理的流 ID
 coro::Task<void> H2Session::HandleStream(int32_t stream_id)
+{
+    co_await H2StreamProcessor(*this, stream_id).Run();
+}
+
+coro::Task<void> H2Session::ProcessStream(int32_t stream_id)
 {
     auto it = streams_.find(stream_id);
     if (it == streams_.end()) co_return;
@@ -807,79 +809,11 @@ coro::Task<void> H2Session::HandleStream(int32_t stream_id)
             co_return;
         }
 
-        // ── Build and send response headers ──
-        WriteResponseHeaders(stream_id, resp);
-
-        // ── SSE stream ──
-        if (resp.IsStream()) {
-            int32_t sid = stream_id;
-            int push_ms = resp.PushIntervalMs();
-
-            // Build and send initial payload
-            {
-                auto init = SseInitialPayload(metrics_);
-                WriteData(sid,
-                    reinterpret_cast<const uint8_t*>(init.data()),
-                    init.size(), false);
-                if (!co_await FlushOutput()) { ok = true; goto cleanup; }
-            }
-
-            // ── SSE push loop ──
-            {
-                SsePushState sse;
-                sse.Init(metrics_);
-
-                while (!goaway_sent_ && !goaway_received_
-                       && !ctx.stream_closed_)
-                {
-                    co_await coro::sleep_for(push_ms);
-
-                    auto payload = sse.BuildPayload(metrics_);
-                    if (payload.empty())
-                        payload = ":\n\n";  // SSE keepalive
-
-                    WriteData(sid,
-                        reinterpret_cast<const uint8_t*>(payload.data()),
-                        payload.size(), false);
-                    if (!co_await FlushOutput())
-                        break;
-                }
-            }
-
-            ok = true;
-            goto cleanup;
-        }
-
-        // ── Normal (non-SSE): determine body ──
-        size_t body_len = 0;
-        const uint8_t* body_ptr = nullptr;
-
-        if (!resp.BodyWire().empty()) {
-            body_ptr = reinterpret_cast<const uint8_t*>(resp.BodyWire().data());
-            body_len = resp.BodyWire().size();
-        } else if (resp.IsFile()) {
-            auto file_len = (resp.FileRangeLen() > 0)
-                          ? resp.FileRangeLen()
-                          : resp.FileSize();
-            ctx.file_buf_.resize(file_len);
-            auto n = ::pread(resp.Fd(), ctx.file_buf_.data(),
-                             file_len,
-                             static_cast<off_t>(resp.FileRangeOffset()));
-            if (n > 0) {
-                ctx.file_buf_.resize(static_cast<size_t>(n));
-                body_ptr = reinterpret_cast<const uint8_t*>(ctx.file_buf_.data());
-                body_len = static_cast<size_t>(n);
-            }
-        }
-
-        // ── Send DATA frame ──
-        if (body_len > 0)
-            WriteData(stream_id, body_ptr, body_len, true);  // END_STREAM
-        else
-            WriteData(stream_id, nullptr, 0, true);  // empty body, END_STREAM
+        const size_t body_len = co_await H2StreamProcessor(*this, stream_id)
+                                    .WriteResponse(ctx, resp);
 
         // ── Post-handle: record metrics ──
-        {
+        if (!resp.IsStream()) {
             auto end = std::chrono::steady_clock::now();
             auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
                                end - start_time).count();
