@@ -10,6 +10,7 @@
 H2FlowControl::H2FlowControl(uint32_t initial_window)
     : recv_initial_(initial_window)
     , send_initial_(initial_window)
+    , conn_recv_initial_(initial_window)   // 连接级初始值单独留档，SETTINGS 不会再动它
 {
     conn_recv_.credit = static_cast<int32_t>(initial_window);
     conn_recv_.consumed = 0;
@@ -85,7 +86,11 @@ uint32_t H2FlowControl::RecvWindow(uint32_t stream_id) const
 
     auto it = recv_.find(stream_id);
     if (it == recv_.end())
-        return recv_initial_;   // 未知流：按初始窗口满额
+        // 未知流：流级按初始窗口满额，但仍要受连接窗口约束。
+        // 这里漏掉 min 就与 SendWindow 的未知流分支不对称了——而 RecvWindow
+        // 用 find 不建条目，首个 DATA 到达前必然走这一支。
+        return std::min(Clamp(static_cast<int32_t>(recv_initial_)),
+                        Clamp(conn_recv_.credit));
 
     return std::min(Clamp(it->second.credit), Clamp(conn_recv_.credit));
 }
@@ -94,8 +99,12 @@ uint32_t H2FlowControl::RecvWindow(uint32_t stream_id) const
 // 参数：stream_id - 流 ID（0 = 连接级）
 bool H2FlowControl::ShouldUpdate(uint32_t stream_id) const
 {
+    // 连接级阈值必须用【连接自己的】初始窗口：连接窗口不受
+    // SETTINGS_INITIAL_WINDOW_SIZE 影响（§6.9.2），上限恒为 conn_recv_initial_。
+    // 若误用 recv_initial_，本端一旦广告大接收窗口，阈值就会高过连接窗口能消耗
+    // 的上限，本函数永假 → 连接级 WINDOW_UPDATE 永不发出 → 整条连接停滞。
     if (stream_id == 0)
-        return conn_recv_.consumed >= recv_initial_ / 2;
+        return conn_recv_.consumed >= conn_recv_initial_ / 2;
 
     auto it = recv_.find(stream_id);
     if (it == recv_.end()) return false;
@@ -107,13 +116,7 @@ bool H2FlowControl::ShouldUpdate(uint32_t stream_id) const
 // 参数：stream_id - 流 ID（0 = 连接级）；返回：WINDOW_UPDATE 帧的增量
 uint32_t H2FlowControl::PopCredit(uint32_t stream_id)
 {
-    if (stream_id == 0) {
-        uint32_t credit = conn_recv_.consumed;
-        conn_recv_.consumed = 0;
-        conn_recv_.credit += static_cast<int32_t>(credit);
-        return credit;
-    }
-
+    // GetOrCreateRecv(0) 返回的就是 conn_recv_，无需为连接级单开分支
     auto& ws = GetOrCreateRecv(stream_id);
     uint32_t credit = ws.consumed;
     ws.consumed = 0;

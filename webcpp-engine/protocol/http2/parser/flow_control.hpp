@@ -98,8 +98,15 @@ private:
         uint32_t consumed = 0;   // 自上次 WINDOW_UPDATE 以来已消费的字节数
     };
 
-    uint32_t recv_initial_ = 65535;   // 本端 SETTINGS 的 INITIAL_WINDOW_SIZE
-    uint32_t send_initial_ = 65535;   // 对端 SETTINGS 的 INITIAL_WINDOW_SIZE
+    uint32_t recv_initial_ = 65535;   // 本端 SETTINGS 的 INITIAL_WINDOW_SIZE（只作用于流级）
+    uint32_t send_initial_ = 65535;   // 对端 SETTINGS 的 INITIAL_WINDOW_SIZE（只作用于流级）
+    // 连接级接收账的初始大小。它与流级不同，【不】受 SETTINGS_INITIAL_WINDOW_SIZE
+    // 影响（§6.9.2），所以必须单独存一份：连接级的补窗口阈值要用它，不能用
+    // recv_initial_。否则本端一旦广告了大接收窗口，阈值会高过连接窗口本身能
+    // 消耗的上限（连接窗口上限恒为它的初始值），ShouldUpdate(0) 永假、连接级
+    // WINDOW_UPDATE 永不发出 → 连接窗口耗尽后整条连接停滞。
+    // 这与 h2_session.cpp 里记录的「peer 10MB → 收满 64KB 后大 body 死锁」同源。
+    uint32_t conn_recv_initial_ = 65535;
     RecvState conn_recv_;             // 连接级接收账
     int32_t   conn_send_ = 65535;     // 连接级发送账
 
