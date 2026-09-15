@@ -545,14 +545,16 @@ void H2Session::WakeWsStream(H2StreamContext& ctx)
 // ProcessPending — drain the stream pending queue
 // ═══════════════════════════════════════════════════════════════
 
-// 顺序处理流待处理队列：逐条 HandleStream，直到队列清空
+// 分派已就绪流：每条流运行在同一事件循环的独立协程中，不能阻塞连接读循环。
 // 参数：无
 coro::Task<void> H2Session::ProcessPending()
 {
     while (stream_mgr_.HasPending()) {
         auto sid = stream_mgr_.Dequeue();
-        co_await HandleStream(sid);
+        auto self = std::static_pointer_cast<H2Session>(shared_from_this());
+        net::spawn(self->HandleStream(sid), loop_);
     }
+    co_return;
 }
 
 // ═══════════════════════════════════════════════════════════════
