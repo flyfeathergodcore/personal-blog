@@ -36,6 +36,14 @@ public:
     // 默认构造函数。
     H2StreamContext() = default;
 
+    // 初始化本流独占的请求区域；流销毁时区域自动归还给池。
+    void InitRegion(RegionPool* pool) {
+        region_.Init(pool);
+        region_.SetStructuredMode(true);
+        SetPool(&region_);
+    }
+    SessionRegion& Region() { return region_; }
+
     // 设置请求方法（:method 伪头）。
     void SetMethod(std::string_view m);
     // 设置请求路径（:path 伪头）。
@@ -99,6 +107,7 @@ public:
     bool stream_closed_ = false; // true when RST_STREAM / stream close received
 
 private:
+    SessionRegion region_;
     static constexpr int kMaxHeaders = 64;
 
     RegionOff method_;

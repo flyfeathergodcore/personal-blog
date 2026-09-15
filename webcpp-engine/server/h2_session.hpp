@@ -60,6 +60,7 @@ private:
     // ── Core ──
     net::TlsStream socket_;
     coro::EventLoop& loop_;   // 构造时取自 coro::EventLoop::current()（worker loop）
+    RegionPool* region_pool_ = nullptr;
 
     // ── Custom H2 modules ──
     HpackDecoder    hpack_decoder_;

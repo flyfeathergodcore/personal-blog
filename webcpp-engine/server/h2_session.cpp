@@ -29,10 +29,8 @@ H2Session::H2Session(net::TlsStream stream,
     : SessionBase(router, middleware)
     , socket_(std::move(stream))
     , loop_(coro::EventLoop::current())
+    , region_pool_(region_pool)
 {
-    if (region_pool)
-        region_.Init(region_pool);
-
     // Advertise ENABLE_CONNECT_PROTOCOL (RFC 8441 WebSocket)
     local_settings_.enable_connect_protocol = 1;
     local_settings_.max_concurrent_streams = stream_mgr_.MaxConcurrent();
@@ -220,9 +218,8 @@ void H2Session::OnHeaders(const H2FrameHeader& hdr, const uint8_t* payload)
     // Get or create stream context
     auto [it, created] = streams_.try_emplace(sid);
     if (created)
-        it->second.SetPool(&region_);
+        it->second.InitRegion(region_pool_);
     auto& ctx = it->second;
-    ctx.SetPool(&region_);
 
     // Compute HPACK block location (skip padding/priority fields)
     size_t hpack_off = HeadersBlockStart(hdr);
@@ -711,8 +708,6 @@ coro::Task<void> H2Session::HandleStream(int32_t stream_id)
         co_return;
     }
 
-    ctx.SetPool(&region_);
-    region_.SetStructuredMode(true);
 
     // ── Body size check ──
     if (max_body_size_ > 0 && ctx.ContentLength() > max_body_size_) {
@@ -737,7 +732,7 @@ coro::Task<void> H2Session::HandleStream(int32_t stream_id)
             ctx.SetParams(params);
             if (handler && handler->IsStream()) {
                 // ── 流式路径 ──
-                auto sse_resp = Response::SSEStream(region_, 0);
+                auto sse_resp = Response::SSEStream(ctx.Region(), 0);
                 WriteResponseHeaders(stream_id, sse_resp);
                 {
                     auto init = SseInitialPayload(metrics_);
@@ -757,7 +752,7 @@ coro::Task<void> H2Session::HandleStream(int32_t stream_id)
             } else if (handler) {
                 resp = handler->Handle(ctx);
             } else {
-                resp = Response::Error(404, region_);
+                resp = Response::Error(404, ctx.Region());
             }
         }
 
@@ -909,8 +904,5 @@ cleanup:
     stream_mgr_.RemoveStream(stream_id);
     flow_control_.RemoveStream(stream_id);   // 两本账一并清理，避免映射无界增长
 
-    // Reset the region when all streams on this connection are done
-    if (streams_.empty())
-        region_.Reset();
     co_return;
 }
