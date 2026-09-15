@@ -5,6 +5,7 @@
 #include "server/ws_connection_h2.hpp"
 #include "protocol/http2/parser/BFL.hpp"
 #include "protocol/http2/parser/HPACK.hpp"
+#include "protocol/http2/parser/h2_frame_encoder.hpp"
 #include "protocol/http2/parser/stream_manager.hpp"
 #include "protocol/http2/parser/flow_control.hpp"
 #include "net/tls_stream.h"
@@ -72,6 +73,7 @@ private:
     std::array<uint8_t, kReadBufSize> read_buf_;
     size_t read_buf_used_ = 0;
     std::vector<uint8_t> output_;
+    H2FrameEncoder frame_enc_{output_};
     bool writing_ = false;
 
     // ── Local settings (advertised to peer) ──

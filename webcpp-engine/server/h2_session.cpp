@@ -65,13 +65,7 @@ coro::Task<void> H2Session::Start()
     // ── Connection preface: send our SETTINGS ──
     uint8_t settings_payload[64];
     size_t slen = EncodeSettings(settings_payload, local_settings_);
-    {
-        size_t pos = output_.size();
-        output_.resize(pos + kFrameHeaderSize + slen);
-        EncodeFrameHeader(output_.data() + pos,
-            {static_cast<uint32_t>(slen), H2FrameType::SETTINGS, 0, 0});
-        std::memcpy(output_.data() + pos + kFrameHeaderSize, settings_payload, slen);
-    }
+    frame_enc_.AppendSettings(settings_payload, slen);
 
     if (!co_await FlushOutput()) co_return;
 
@@ -245,6 +239,7 @@ void H2Session::OnSettings(const H2FrameHeader& hdr, const uint8_t* payload)
             return;
         }
         peer_max_frame_size_ = *s.max_frame_size;
+        frame_enc_.SetPeerMaxFrameSize(peer_max_frame_size_);
     }
 
     // Respond with SETTINGS ACK
@@ -666,100 +661,49 @@ void H2Session::WriteHeaders(int32_t sid,
                               const std::vector<uint8_t>& hpack,
                               bool end_headers)
 {
-    uint8_t flags = end_headers ? H2Flags::END_HEADERS : 0;
-    size_t pos = output_.size();
-    output_.resize(pos + kFrameHeaderSize + hpack.size());
-    EncodeFrameHeader(output_.data() + pos,
-        {static_cast<uint32_t>(hpack.size()), H2FrameType::HEADERS, flags, static_cast<uint32_t>(sid)});
-    if (!hpack.empty())
-        std::memcpy(output_.data() + pos + kFrameHeaderSize, hpack.data(), hpack.size());
+    frame_enc_.AppendHeaders(sid, hpack, end_headers);
 }
 
 // 按对端 SETTINGS_MAX_FRAME_SIZE 把数据切成若干 DATA 帧追加到 output_，END_STREAM 标志落在最后一帧
 // 参数：sid - 目标流 ID；data - 负载指针（可空）；len - 负载长度；end_stream - 是否结束流
 void H2Session::WriteData(int32_t sid, const uint8_t* data, size_t len, bool end_stream)
 {
-    // ── 分帧循环：按 peer 的 SETTINGS_MAX_FRAME_SIZE（默认 16384）把 len 切成若干
-    //    ≤ 该值的 DATA 帧追加到 output_，END_STREAM 标志只落在最后一帧。
-    //    原实现把整个 body 塞进单个 DATA 帧，>16KB 响应违反 max frame size，
-    //    客户端只收到帧头、body 丢失（curl exit 18 CURLE_PARTIAL_FILE）。
-    //    调用方（H2StreamSink::Write、HandleStream 响应路径）传整块 buffer 即可，
-    //    分帧在此透明完成。len==0 且 end_stream 时仍发单帧空 DATA + END_STREAM
-    //    （现有调用路径依赖此语义）。
-    const size_t max = (peer_max_frame_size_ > 0)
-                       ? peer_max_frame_size_ : kDefaultMaxFrameSize;
-    size_t off = 0;
-    for (;;) {
-        size_t chunk = std::min(len - off, max);
-        bool last = (off + chunk >= len);
-        uint8_t flags = (last && end_stream) ? H2Flags::END_STREAM : 0;
-
-        size_t pos = output_.size();
-        output_.resize(pos + kFrameHeaderSize + chunk);
-        EncodeFrameHeader(output_.data() + pos,
-            {static_cast<uint32_t>(chunk), H2FrameType::DATA, flags,
-             static_cast<uint32_t>(sid)});
-        if (chunk > 0 && data)
-            std::memcpy(output_.data() + pos + kFrameHeaderSize, data + off, chunk);
-
-        if (last) break;
-        off += chunk;
-    }
+    frame_enc_.AppendData(sid, data, len, end_stream);
 }
 
 // 追加一条 RST_STREAM 帧到 output_，用于中止/关闭流
 // 参数：sid - 目标流 ID；err - 错误码
 void H2Session::WriteRstStream(int32_t sid, H2Error err)
 {
-    size_t pos = output_.size();
-    output_.resize(pos + kFrameHeaderSize + 4);
-    EncodeFrameHeader(output_.data() + pos,
-        {4, H2FrameType::RST_STREAM, 0, static_cast<uint32_t>(sid)});
-    EncodeRstStream(output_.data() + pos + kFrameHeaderSize, err);
+    frame_enc_.AppendRstStream(sid, err);
 }
 
 // 追加一条 GOAWAY 帧到 output_，通告对端停止新流
 // 参数：last_sid - 已处理的最后流 ID；err - 错误码
 void H2Session::WriteGoAway(int32_t last_sid, H2Error err)
 {
-    size_t pos = output_.size();
-    output_.resize(pos + kFrameHeaderSize + 8);
-    EncodeFrameHeader(output_.data() + pos,
-        {8, H2FrameType::GOAWAY, 0, 0});
-    EncodeGoAway(output_.data() + pos + kFrameHeaderSize,
-                 {static_cast<uint32_t>(last_sid), err});
+    frame_enc_.AppendGoAway(last_sid, err);
 }
 
 // 追加一条 WINDOW_UPDATE 帧到 output_，补充流/连接级接收窗口
 // 参数：sid - 目标流 ID（0 为连接级）；increment - 窗口增量
 void H2Session::WriteWindowUpdate(int32_t sid, uint32_t increment)
 {
-    size_t pos = output_.size();
-    output_.resize(pos + kFrameHeaderSize + 4);
-    EncodeFrameHeader(output_.data() + pos,
-        {4, H2FrameType::WINDOW_UPDATE, 0, static_cast<uint32_t>(sid)});
-    EncodeWindowUpdate(output_.data() + pos + kFrameHeaderSize, increment);
+    frame_enc_.AppendWindowUpdate(sid, increment);
 }
 
 // 追加一条 PING ACK 帧到 output_，回应对端 PING
 // 参数：ping - 要回显的 8 字节 opaque 数据
 void H2Session::WritePingAck(const H2Ping& ping)
 {
-    size_t pos = output_.size();
-    output_.resize(pos + kFrameHeaderSize + 8);
-    EncodeFrameHeader(output_.data() + pos,
-        {8, H2FrameType::PING, H2Flags::ACK, 0});
-    EncodePing(output_.data() + pos + kFrameHeaderSize, ping);
+    frame_enc_.AppendPingAck(ping);
 }
 
 // 追加一条 SETTINGS ACK 帧到 output_，确认对端 SETTINGS
 // 参数：无
 void H2Session::WriteSettingsAck()
 {
-    size_t pos = output_.size();
-    output_.resize(pos + kFrameHeaderSize);
-    EncodeFrameHeader(output_.data() + pos,
-        {0, H2FrameType::SETTINGS, H2Flags::ACK, 0});
+    frame_enc_.AppendSettingsAck();
 }
 
 // ═══════════════════════════════════════════════════════════════

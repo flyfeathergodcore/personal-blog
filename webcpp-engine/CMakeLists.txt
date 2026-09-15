@@ -68,6 +68,7 @@ set(WEBCPP_ENGINE_SOURCES
     protocol/http1.1/parser.cpp
     protocol/http2/stream_context.cpp
     protocol/http2/parser/HPACK.cpp
+    protocol/http2/parser/h2_frame_encoder.cpp
     protocol/http2/parser/stream_manager.cpp
     protocol/http2/parser/flow_control.cpp
     net/tcp_stream.cpp
