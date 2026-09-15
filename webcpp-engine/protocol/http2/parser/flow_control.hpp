@@ -8,11 +8,13 @@
 // 本类只做账：不做 IO、不认识协程、不持有任何事件循环概念。四组状态：
 //
 //   接收账 —— 对端还能发给我们多少
-//     conn_recv_ —— 连接级，初始 65535，只能由【我们发 WINDOW_UPDATE】补充
+//     conn_recv_ —— 连接级，初始 = 构造函数给的初始窗口（默认 65535）；
+//                   此后【不再受 SETTINGS 影响】，只能由我们发 WINDOW_UPDATE 补充
 //     recv_[sid] —— 流级，初始 = 本端 SETTINGS 的 INITIAL_WINDOW_SIZE
 //
 //   发送账 —— 我们还能发给对端多少
-//     conn_send_ —— 连接级，初始 65535，只能由【对端 WINDOW_UPDATE】补充
+//     conn_send_ —— 连接级，初始 = 构造函数给的初始窗口（默认 65535）；
+//                   此后【不再受 SETTINGS 影响】，只能由对端 WINDOW_UPDATE 补充
 //     send_[sid] —— 流级，初始 = 对端 SETTINGS 的 INITIAL_WINDOW_SIZE
 //
 // 两条 RFC 规则划定了这四组状态之间的边界（旧实现两条都违反了）：
