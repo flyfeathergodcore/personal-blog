@@ -1,0 +1,43 @@
+// rpc 框架自身的线协议元数据：帧格式 + 状态码。
+// 帧结构 = [4 字节大端长度][本消息序列化]；同一连接内按 call_id 多路复用。
+syntax = "proto3";
+
+package rpc;
+
+// 帧类型：区分一元调用与双向流的各类帧
+enum RpcKind {
+  RPC_UNKNOWN = 0;
+  UNARY_REQUEST  = 1;   // 客户端→服务端：携带 service/method + payload=请求体
+  UNARY_RESPONSE = 2;   // 服务端→客户端：payload=响应体，或 status=错误
+  STREAM_INIT   = 3;    // 客户端→服务端：开启一条流，携带 service/method + call_id
+  STREAM_DATA   = 4;    // 双向：payload = 一条业务消息
+  STREAM_DONE   = 5;    // 双向：表示"该方向结束/半关闭"，携带 status
+  HEARTBEAT     = 6;    // 保活（预留）
+  CANCEL        = 7;    // 客户端取消指定 call_id（预留）
+}
+
+// 一次调用的状态码（协议层）
+enum RpcStatus {
+  ST_OK          = 0;
+  ST_ERROR       = 1;   // 处理器抛异常 / 内部错误
+  ST_NOT_FOUND   = 2;   // service/method 不存在
+  ST_TIMEOUT     = 3;   // 客户端超时
+  ST_CANCELLED   = 4;   // 调用被取消
+  ST_CLOSED      = 5;   // 连接关闭
+  ST_UNKNOWN     = 6;
+}
+
+// 单帧：长度前缀帧内的完整负载
+message RpcFrame {
+  RpcKind  kind = 1;
+  // 连接内唯一调用 id；0 保留。同一调用（一元请求/响应、流的全部帧）共用同一 call_id
+  uint64   call_id = 2;
+  // 服务全名 "pkg.Service"；仅请求帧（UNARY_REQUEST/STREAM_INIT）填写，其余帧省略
+  string   service_name = 3;
+  // 方法名 "SayHello"；仅请求帧填写
+  string   method_name  = 4;
+  RpcStatus status = 5;
+  string   error_message = 6;
+  // 一元：请求/响应体；流：一条业务消息的序列化字节
+  bytes    payload = 7;
+}

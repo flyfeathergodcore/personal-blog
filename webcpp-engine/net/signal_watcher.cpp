@@ -68,14 +68,12 @@ static void SigPipeHandler(int sig) {
     }
 }
 
-// 初始化 self-pipe：block 指定信号 + 创建管道 + 为各信号安装 handler
+// 初始化 self-pipe：创建管道 + 为各信号安装 handler。
+// macOS/BSD 没有 signalfd，若像 Linux 一样先 block 信号，handler 永远不会
+// 执行，SIGTERM/SIGINT 会一直停在 pending 状态。这里由 handler 写管道唤醒
+// 协程，因此必须保持信号未屏蔽。
 // 参数：sigs - 需监听的信号集合。成功返回 true（fd_ 为管道读端）
 bool SignalWatcher::init(const std::vector<int>& sigs) {
-    sigset_t set;
-    sigemptyset(&set);
-    for (int s : sigs) sigaddset(&set, s);
-    sigprocmask(SIG_BLOCK, &set, nullptr);   // 与 signalfd 语义一致：先 block
-
     int fds[2];
     if (::pipe(fds) != 0) return false;
     for (int i = 0; i < 2; ++i) {

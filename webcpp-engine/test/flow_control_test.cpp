@@ -1,5 +1,5 @@
 // H2 流控账本单元测试：纯逻辑，无 socket / TLS / 协程
-#include "protocol/http2/parser/flow_control.hpp"
+#include "http/protocol/http2/parser/flow_control.hpp"
 #include <cstdint>
 #include <cstdio>
 
@@ -123,6 +123,18 @@ static void test_should_update_below_threshold()
     CHECK(!fc.ShouldUpdate(0), "连接级同上");
 }
 
+// ── 接收账：关闭流的在途 DATA 只影响连接账 ──
+static void test_connection_only_recv_does_not_recreate_stream()
+{
+    H2FlowControl fc;
+    fc.ConsumeConnectionRecv(2048);
+
+    CHECK(fc.RecvWindow(0) == 65535 - 2048, "在途 DATA 扣连接接收窗口");
+    CHECK(!fc.HasStream(1), "连接级扣账不创建已关闭流账本");
+    CHECK(fc.PopCredit(0) == 2048, "可立即归还在途 DATA 的连接信用");
+    CHECK(fc.RecvWindow(0) == 65535, "归还后连接窗口恢复");
+}
+
 // ── 发送账：连接窗口是所有流共用的 ──
 static void test_send_window_is_min_of_stream_and_connection()
 {
@@ -238,6 +250,7 @@ int main()
     test_recv_window_clamps_negative();
     test_pop_credit_returns_consumed_amount();
     test_should_update_below_threshold();
+    test_connection_only_recv_does_not_recreate_stream();
     test_send_window_is_min_of_stream_and_connection();
     test_add_send_credit_connection_releases_all_streams();
     test_add_send_credit_stream_does_not_touch_connection();

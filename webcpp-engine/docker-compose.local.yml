@@ -1,0 +1,33 @@
+name: webcpp-local
+
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: "123456"
+    volumes:
+      - webcpp_local_mysql_data:/var/lib/mysql
+      - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      default:
+        aliases:
+          - mysql1
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p123456 --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  blog:
+    build:
+      context: ..
+      dockerfile: webcpp-engine/Dockerfile
+    image: webcpp-blog-engine:local
+    depends_on:
+      mysql:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:19443:8443"
+
+volumes:
+  webcpp_local_mysql_data:

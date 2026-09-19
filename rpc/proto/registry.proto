@@ -1,0 +1,52 @@
+// 注册中心服务协议：业务服务端注册/心跳/注销，客户端服务发现。
+// 独立 registry 进程承载（registry_server），框架自带，不依赖博客后端。
+// 生成：registry.pb.* + registry.rpc.h（protoc --cpp_out / --rpc_out）
+syntax = "proto3";
+
+package rpc.registry;
+
+// 服务实例：某个运行中的服务端点
+message Instance {
+  string service_name = 1;   // 注册键："greeter.Greeter"（service 全名）
+  string host = 2;           // 实例地址
+  uint32 port = 3;           // 实例端口
+  int64  lease_seconds = 4;  // 租约秒数：注册方承诺每 <lease> 秒心跳一次，超期未续租即被剔除
+}
+
+message RegisterRequest {
+  Instance instance = 1;
+}
+// 注册成功返回分配的唯一实例 ID（后续心跳/注销的凭证）
+message RegisterReply {
+  string instance_id = 1;
+}
+
+message HeartbeatRequest {
+  string instance_id = 1;
+}
+message HeartbeatReply {
+  bool ok = 1;  // false = 实例不存在（已过期被剔除/从未注册）
+}
+
+message DeregisterRequest {
+  string instance_id = 1;
+}
+message DeregisterReply {
+  bool ok = 1;  // false = 实例不存在
+}
+
+message DiscoverRequest {
+  string service_name = 1;  // 按服务全名查询
+}
+// 返回该服务名下当前有效（未过期）的实例列表；空表示无可用实例
+message DiscoverReply {
+  repeated Instance instances = 1;
+}
+
+// 注册中心服务
+service RegistryService {
+  rpc Register(RegisterRequest) returns (RegisterReply);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatReply);
+  rpc Deregister(DeregisterRequest) returns (DeregisterReply);
+  rpc Discover(DiscoverRequest) returns (DiscoverReply);
+}

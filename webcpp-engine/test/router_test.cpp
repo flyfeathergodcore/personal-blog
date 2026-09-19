@@ -5,12 +5,12 @@
 // lambda 函数式注册、类式注册（unique_ptr 重载不被模板劫持）、
 // Context 的 Param/Query 端到端（真实 H1Parser + SessionRegion）。
 // ═══════════════════════════════════════════════════════════════════
-#include "router/router.hpp"
-#include "protocol/context.hpp"
-#include "protocol/session_region.hpp"
-#include "protocol/region_pool.hpp"
-#include "protocol/http1.1/parser.hpp"
-#include "handler/request_handler.hpp"
+#include "http/router/router.hpp"
+#include "http/protocol/context.hpp"
+#include "http/protocol/session_region.hpp"
+#include "http/protocol/region_pool.hpp"
+#include "http/protocol/http1.1/parser.hpp"
+#include "http/handler/request_handler.hpp"
 #include <cstdio>
 #include <cstring>
 #include <string>

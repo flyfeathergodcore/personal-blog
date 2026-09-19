@@ -1,12 +1,18 @@
 # webcpp-engine
 
-基于 coroutine 的 C++ HTTP/1.1 + HTTP/2 服务器。事件循环使用外部协程库
-`/home/ubuntu/coro`（epoll ET 模式，每 worker 一个独立 EventLoop），零 asio 依赖。
+基于 coroutine 的 C++ HTTP/1.1 + HTTP/2 服务器。事件循环使用随工程分发的
+`coro/`（epoll ET 模式，每 worker 一个独立 EventLoop），零 asio 依赖。
+
+目录按职责分层：`net/` 提供 TCP/TLS、监听、解析地址与缓冲 I/O；`tcp/` 提供可复用
+的 `tcp::Reactor`（Linux epoll / macOS kqueue）、`tcp::Listener`、带 `Receive` /
+`Send` / `Sendv` 的 `tcp::Channel`、`tcp::Server` 与服务入口；`http/` 提供 HTTP
+协议、会话、路由、中间件、配置和 handler，并链接 `webcpp_tcp`。
+原有 `webcpp_engine` CMake 目标保留为兼容入口，链接到 `webcpp_http` 即可。
 
 ## 构建与运行
 
 ```bash
-# 构建（需预先配置 CORO_DIR 指向 coro 库）
+# 构建（默认使用当前工程的 coro/）
 cmake -B build && cmake --build build -j
 
 # 运行（明文 h1）
@@ -14,6 +20,9 @@ cmake -B build && cmake --build build -j
 
 # 运行（TLS h2）—— tls_port > 0 时单端口只监听 TLS，h1/h2 需两个进程
 ./build/demo_server -c /tmp/perf_tls_cfg.yaml     # tls_port 8443
+
+# 独立 TCP 字节回显服务（默认 127.0.0.1:8081）
+./build/tcp_server -p 8081
 ```
 
 配置文件为 YAML，`server:` 段支持 `port` / `tls_port` / `threads` / `log_dir` /
@@ -22,9 +31,7 @@ cmake -B build && cmake --build build -j
 ## 测试
 
 ```bash
-./build/net_test        # 协议层单元测试 PASS=40
-./build/log_test        # 日志层单元测试
-./build/demo_smoke      # h1 / h2 / proxy / ws-proxy 冒烟
+ctest --test-dir build  # 单元测试与 HTTP/TCP 冒烟测试
 ```
 
 ## 性能
@@ -56,5 +63,5 @@ cmake -B build && cmake --build build -j
 1. **唤醒管道"大水漫灌"根治**（coro event_loop，随库传播）：`wake()` 从写满 64KB 管道
    改为单块 64 字节；新增 `waiters_` 计数，仅在确有线程阻塞于 poll 时按需唤醒。
    修复前空闲时每 worker 每秒 ~1026 次管道读写（纯空转），修复后 0/0。
-2. **日志 26% 开销根治**（log/logger.hpp + middleware/middleware.cpp）：每请求全局锁、
+2. **日志 26% 开销根治**（log/logger.hpp + http/middleware/middleware.cpp）：每请求全局锁、
    重复 localtime_r/strftime、多次堆分配 全部消除（详情见代码注释与 SDD 台账）。

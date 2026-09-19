@@ -13,8 +13,8 @@ endif()
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # 协程库统一使用外部 coro（不再内置副本，消除两份 coro 分叉 / ODR 风险）：
-# 默认取仓库根目录顶层 coro（即本文件上一级），可用 -DCORO_DIR=... 覆盖。
-set(CORO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../coro" CACHE PATH "外部 coro 独立协程库路径")
+# 默认使用 webcpp-engine 随附的 coro；可用 -DCORO_DIR=... 覆盖。
+set(CORO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../webcpp-engine/coro" CACHE PATH "coro 协程库路径")
 # 作为顶层统一构建的子目录时 coro 已由父工程添加，跳过（避免 target 重定义）
 if(NOT TARGET coro)
     if(NOT EXISTS ${CORO_DIR}/CMakeLists.txt)

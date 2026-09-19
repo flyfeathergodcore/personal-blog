@@ -31,9 +31,9 @@ int64_t remaining_ms(int64_t deadline, int64_t timeout_ms)
 
 }  // namespace
 
-// 构造：包装底层 TcpStream 与 SSL_CTX，创建服务端模式 SSL 对象并确保 fd 非阻塞
+// 构造：包装底层 tcp::Stream 与 SSL_CTX，创建服务端模式 SSL 对象并确保 fd 非阻塞
 // 参数：tcp - 底层连接（接管所有权）；ctx - TLS 上下文
-TlsStream::TlsStream(TcpStream tcp, SSL_CTX* ctx)
+TlsStream::TlsStream(tcp::Stream tcp, SSL_CTX* ctx)
     : tcp_(std::move(tcp)), ctx_(ctx)
 {
     if (!ctx_ || tcp_.fd() < 0) return;
@@ -86,13 +86,13 @@ void TlsStream::close()
 
 // 服务端 TLS 握手（SSL_accept 循环），WANT_READ/WANT_WRITE 时挂起等待事件
 // 参数：timeout_ms - 握手超时（毫秒，<0 无限）。成功返回 {0, None}
-coro::Task<IoResult> TlsStream::handshake(int64_t timeout_ms)
+coro::Task<tcp::IoResult> TlsStream::handshake(int64_t timeout_ms)
 {
-    if (!ssl_ || !tcp_.is_open()) co_return IoResult{0, IoError::Closed};
+    if (!ssl_ || !tcp_.is_open()) co_return tcp::IoResult{0, tcp::IoError::Closed};
     const int64_t deadline = (timeout_ms >= 0) ? now_ms() + timeout_ms : 0;
     for (;;) {
         int r = SSL_accept(ssl_);
-        if (r == 1) co_return IoResult{0, IoError::None};   // 握手完成
+        if (r == 1) co_return tcp::IoResult{0, tcp::IoError::None};   // 握手完成
 
         int err = SSL_get_error(ssl_, r);
         coro::IoPoller::Event ev;
@@ -105,29 +105,29 @@ coro::Task<IoResult> TlsStream::handshake(int64_t timeout_ms)
         } else {
             // 对端在握手完成前关闭 / 协议错误
             if (err == SSL_ERROR_ZERO_RETURN || err == SSL_ERROR_SYSCALL)
-                co_return IoResult{0, IoError::Eof};
-            co_return IoResult{0, IoError::Other};
+                co_return tcp::IoResult{0, tcp::IoError::Eof};
+            co_return tcp::IoResult{0, tcp::IoError::Other};
         }
 
         int64_t rem = remaining_ms(deadline, timeout_ms);
-        if (rem == 0) co_return IoResult{0, IoError::Timeout};
+        if (rem == 0) co_return tcp::IoResult{0, tcp::IoError::Timeout};
         auto ready = co_await coro::await_event(tcp_.fd(), ev, rem);
         if (ready == coro::Readiness::Timeout)
-            co_return IoResult{0, IoError::Timeout};
+            co_return tcp::IoResult{0, tcp::IoError::Timeout};
     }
 }
 
-// 解密读取一帧数据，语义与 TcpStream::read_some 一致（Eof=对端 close_notify）
+// 解密读取一帧数据，语义与 tcp::Stream::read_some 一致（Eof=对端 close_notify）
 // 参数：buf - 接收缓冲区；n - 缓冲容量；timeout_ms - 等待超时（毫秒，<0 无限）
-coro::Task<IoResult> TlsStream::read_some(void* buf, size_t n, int64_t timeout_ms)
+coro::Task<tcp::IoResult> TlsStream::read_some(void* buf, size_t n, int64_t timeout_ms)
 {
-    if (!ssl_ || !tcp_.is_open()) co_return IoResult{0, IoError::Closed};
-    if (n == 0) co_return IoResult{0, IoError::None};
+    if (!ssl_ || !tcp_.is_open()) co_return tcp::IoResult{0, tcp::IoError::Closed};
+    if (n == 0) co_return tcp::IoResult{0, tcp::IoError::None};
     const int64_t deadline = (timeout_ms >= 0) ? now_ms() + timeout_ms : 0;
     const int max_n = static_cast<int>(std::min<size_t>(n, INT_MAX));
     for (;;) {
         int r = SSL_read(ssl_, buf, max_n);
-        if (r > 0) co_return IoResult{static_cast<size_t>(r), IoError::None};
+        if (r > 0) co_return tcp::IoResult{static_cast<size_t>(r), tcp::IoError::None};
 
         int err = SSL_get_error(ssl_, r);
         coro::IoPoller::Event ev;
@@ -138,16 +138,16 @@ coro::Task<IoResult> TlsStream::read_some(void* buf, size_t n, int64_t timeout_m
         } else if (err == SSL_ERROR_SYSCALL && errno == EAGAIN) {
             ev = coro::IoPoller::READ;
         } else {
-            if (err == SSL_ERROR_ZERO_RETURN) co_return IoResult{0, IoError::Eof};
-            if (err == SSL_ERROR_SYSCALL && r == 0) co_return IoResult{0, IoError::Eof};
-            co_return IoResult{0, IoError::Other};
+            if (err == SSL_ERROR_ZERO_RETURN) co_return tcp::IoResult{0, tcp::IoError::Eof};
+            if (err == SSL_ERROR_SYSCALL && r == 0) co_return tcp::IoResult{0, tcp::IoError::Eof};
+            co_return tcp::IoResult{0, tcp::IoError::Other};
         }
 
         int64_t rem = remaining_ms(deadline, timeout_ms);
-        if (rem == 0) co_return IoResult{0, IoError::Timeout};
+        if (rem == 0) co_return tcp::IoResult{0, tcp::IoError::Timeout};
         auto ready = co_await coro::await_event(tcp_.fd(), ev, rem);
         if (ready == coro::Readiness::Timeout)
-            co_return IoResult{0, IoError::Timeout};
+            co_return tcp::IoResult{0, tcp::IoError::Timeout};
     }
 }
 
@@ -183,7 +183,7 @@ coro::Task<bool> TlsStream::write_all(std::string_view data, int64_t timeout_ms)
     co_return true;
 }
 
-// 逐段调用 write_all 全量写出（TLS 无系统 writev 收益，仅对齐 TcpStream 接口）
+// 逐段调用 write_all 全量写出（TLS 无系统 writev 收益，仅对齐 tcp::Stream 接口）
 // 参数：parts - 待写段列表；timeout_ms - 写超时（毫秒，<0 无限）。全部写完返回 true
 coro::Task<bool> TlsStream::writev_all(std::initializer_list<std::string_view> parts,
                                        int64_t timeout_ms)

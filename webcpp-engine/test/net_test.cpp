@@ -16,12 +16,11 @@
 #include "coro/event_loop.h"
 #include "coro/task.h"
 #include "coro/awaiter.h"
-#include "net/tcp_stream.h"
-#include "net/tcp_listener.h"
-#include "net/resolver.h"
+#include "tcp/stream.hpp"
+#include "tcp/listener.hpp"
+#include "tcp/connector.hpp"
 #include "net/tls_context.h"
 #include "net/tls_stream.h"
-#include "net/buffered_reader.h"
 #include "net/signal_watcher.h"
 #include "net/when_all.h"
 #include <arpa/inet.h>
@@ -44,30 +43,30 @@ static std::atomic<int> g_read_ok{0}, g_read_n{0};
 static std::atomic<int> g_weof_ok{0};
 
 static coro::Task<void> tcp_read_task() {
-    net::TcpStream s(g_peer);       // 接管对照端 fd（测试内不再直接 close 它）
+    tcp::Stream s(g_peer);       // 接管对照端 fd（测试内不再直接 close 它）
     char buf[16];
     auto r = co_await s.read_some(buf, sizeof(buf), 2000);
     if (r.ok()) { g_read_n = (int)r.bytes; g_read_ok = 1; }
     coro::EventLoop::current().stop();
 }
 static coro::Task<void> tcp_read_eof_task() {
-    net::TcpStream s(g_peer);
+    tcp::Stream s(g_peer);
     char buf[16];
     auto r = co_await s.read_some(buf, sizeof(buf), 2000);
-    if (r.err == net::IoError::Eof) g_weof_ok = 1;
+    if (r.err == tcp::IoError::Eof) g_weof_ok = 1;
     coro::EventLoop::current().stop();
 }
 // 注：write_all 测试用命名协程函数而非 [&] 捕获的协程 lambda——GCC 13 上
 // [&] 协程 lambda 的闭包在语句结束时销毁，事件循环延迟 resume 会访问悬垂闭包
 // （ASan 报 stack-use-after-scope）。参数按值/引用进帧，无闭包生命周期问题。
 static coro::Task<void> tcp_write_task(int wfd, const std::string& data, std::atomic<int>* wrote) {
-    net::TcpStream s(wfd);
+    tcp::Stream s(wfd);
     *wrote = (co_await s.write_all(data)) ? 1 : -1;
     coro::EventLoop::current().stop();
 }
 static coro::Task<void> tcp_writev_task(int wfd, const std::string& a,
                                         const std::string& b, std::atomic<int>* wrote) {
-    net::TcpStream s(wfd);
+    tcp::Stream s(wfd);
     *wrote = (co_await s.writev_all({a, b})) ? 1 : -1;
     coro::EventLoop::current().stop();
 }
@@ -81,7 +80,7 @@ static SSL_CTX* g_tls_ctx = nullptr;
 
 static coro::Task<void> tls_server_task()
 {
-    net::TcpStream tcp(g_tls_fd);
+    tcp::Stream tcp(g_tls_fd);
     net::TlsStream ss(std::move(tcp), g_tls_ctx);
     auto hs = co_await ss.handshake(5000);
     if (!hs.ok()) { g_tls_ok = -1; coro::EventLoop::current().stop(); co_return; }
@@ -204,9 +203,9 @@ static void test_tls()
     ::close(cfd);
 }
 
-// ── 监听/连接用例：TcpListener::open/accept + net::connect ──
+// ── 监听/连接用例：TcpListener::open/accept + tcp::Connect ──
 // 服务端监听协程在后台 loop 上跑：open(0) → 通知主线程取端口 → accept(3s)
-// → 读 2 字节；客户端在主线程的独立小 loop 上 net::connect + write_all("ok")。
+// → 读 2 字节；客户端在主线程的独立小 loop 上 tcp::Connect + write_all("ok")。
 // 注：g_listen_fd 由 loop 线程写、主线程读，靠 g_listen_ready 的
 // release/acquire 序（std::atomic）保证可见性。
 static std::atomic<int> g_listen_ready{0};
@@ -216,11 +215,11 @@ static int g_listen_fd = -1;
 
 static coro::Task<void> listener_task()
 {
-    net::TcpListener ln;
+    tcp::Listener ln;
     CHECK(ln.open("127.0.0.1", 0, false), "listener open");   // port=0 → 系统分配
     g_listen_fd = ln.fd();
     g_listen_ready = 1;                                        // 主线程据此 getsockname
-    net::TcpStream c;
+    tcp::Stream c;
     auto r = co_await ln.accept(c, 3000);
     if (r.ok()) {
         g_accepted = 1;
@@ -234,7 +233,7 @@ static coro::Task<void> listener_task()
 // 客户端：connect 成功后写 "ok"；结果写入 g_client_ok 后停掉所在 loop
 static coro::Task<void> client_task(std::string_view host, uint16_t port)
 {
-    auto s = co_await net::connect(host, port, 3000);
+    auto s = co_await tcp::Connect(host, port, 3000);
     if (!s) { g_client_ok = -1; coro::EventLoop::current().stop(); co_return; }
     bool w = co_await s->write_all("ok", 2000);
     g_client_ok = w ? 1 : -1;
@@ -245,7 +244,7 @@ static coro::Task<void> client_task(std::string_view host, uint16_t port)
 static std::atomic<int> g_refused{0};   // 0=未决, 1=nullptr, -1=意外连接成功
 static coro::Task<void> refused_task(std::string_view host, uint16_t port)
 {
-    auto s = co_await net::connect(host, port, 3000);
+    auto s = co_await tcp::Connect(host, port, 3000);
     g_refused = s ? -1 : 1;
     coro::EventLoop::current().stop();
 }
@@ -305,9 +304,9 @@ static void test_connect_refused()
 
 static void test_resolve()
 {
-    auto eps = net::resolve("localhost", 80);
+    auto eps = tcp::Resolve("localhost", 80);
     CHECK(!eps.empty(), "resolve localhost 非空");
-    auto eps2 = net::resolve("127.0.0.1", 8080);
+    auto eps2 = tcp::Resolve("127.0.0.1", 8080);
     CHECK(!eps2.empty(), "resolve 127.0.0.1 非空");
     if (!eps2.empty()) {
         CHECK(eps2[0].host == "127.0.0.1", "resolve 保留数字 IP");
@@ -315,33 +314,32 @@ static void test_resolve()
     }
 }
 
-// ── BufferedReader 用例：read_until（跨读分隔符）/ read_exact / buffered ──
+// ── Stream 内部缓冲用例：read_until / read_exact / buffered ──
 // 核心验证：read_until 对"分隔符横跨两次 TCP 分段"的处理。任务简报的 read_until
 // 在未命中时把 buf_ 整体清出，分隔符被拆开时永不匹配（读至 EOF）；本实现保留
-// 末尾 delim.size()-1 字节作为跨读候选（见 net/buffered_reader.cpp 注释）。
+// 末尾 delim.size()-1 字节作为跨读候选。
 static std::atomic<int> g_br_ok{0};
 static int g_br_fd = -1;                 // 包成 TcpStream 的对照端
 static std::string g_br_out;
 
 static coro::Task<void> br_split_task() {
-    net::TcpStream s(g_br_fd);
-    net::BufferedReader br(s);
+    tcp::Stream s(g_br_fd);
     // 1) 跨读分隔符：chunk1 以 "\r\n" 结尾（"\r\n\r\n" 的前 2 字节），chunk2 补上
     //    剩余 "\r\n"——完整分隔符必须靠保留的候选字节拼接才能命中
-    auto r = co_await br.read_until("\r\n\r\n", g_br_out);
+    auto r = co_await s.read_until("\r\n\r\n", g_br_out);
     if (!r.ok() || g_br_out != "GET / HTTP/1.1\r\nHost: x") {
         g_br_ok = -1; coro::EventLoop::current().stop(); co_return;
     }
     // 2) 分隔符已消费，其后的 "body" 留在缓冲中未消费（surplus 可被继续发现）
-    if (br.buffered() != "body") { g_br_ok = -2; coro::EventLoop::current().stop(); co_return; }
+    if (s.buffered() != "body") { g_br_ok = -2; coro::EventLoop::current().stop(); co_return; }
     // 3) read_exact：先消费缓冲中 "body"（4 字节），再从流中补读 "XY"（2 字节）
     std::string exact;
-    auto re = co_await br.read_exact(6, exact);
+    auto re = co_await s.read_exact(6, exact);
     if (!re.ok() || exact != "bodyXY") { g_br_ok = -3; coro::EventLoop::current().stop(); co_return; }
-    // 4) 缓冲已被消费尽；同一 BufferedReader 再次 read_until 应越过已消费的
+    // 4) 缓冲已被消费尽；同一 Stream 再次 read_until 应越过已消费的
     //    分隔符继续工作（新写入的第二个头部块命中）
     std::string out2;
-    auto r2 = co_await br.read_until("\r\n\r\n", out2);
+    auto r2 = co_await s.read_until("\r\n\r\n", out2);
     if (!r2.ok() || out2 != "POST /api HTTP/1.1\r\nContent-Length: 0") {
         g_br_ok = -4; coro::EventLoop::current().stop(); co_return;
     }
@@ -349,9 +347,9 @@ static coro::Task<void> br_split_task() {
     coro::EventLoop::current().stop();
 }
 
-static void test_buffered_reader_split() {
+static void test_stream_buffer_split() {
     int sv[2];
-    CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0, "socketpair br 跨读创建");
+    CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0, "socketpair Stream 跨读创建");
     g_br_fd = sv[0];
     fcntl(g_br_fd, F_SETFL, fcntl(g_br_fd, F_GETFL, 0) | O_NONBLOCK);
     int wfd = sv[1];
@@ -385,16 +383,15 @@ static int g_br1_fd = -1;
 static std::string g_br1_out;
 
 static coro::Task<void> br_single_task() {
-    net::TcpStream s(g_br1_fd);
-    net::BufferedReader br(s);
-    auto r = co_await br.read_until("\r\n\r\n", g_br1_out);
+    tcp::Stream s(g_br1_fd);
+    auto r = co_await s.read_until("\r\n\r\n", g_br1_out);
     g_br1_ok = (r.ok() && g_br1_out == "GET / HTTP/1.1\r\nHost: x") ? 1 : -1;
     coro::EventLoop::current().stop();
 }
 
-static void test_buffered_reader_single() {
+static void test_stream_buffer_single() {
     int sv[2];
-    CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0, "socketpair br 单读创建");
+    CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0, "socketpair Stream 单读创建");
     g_br1_fd = sv[0];
     fcntl(g_br1_fd, F_SETFL, fcntl(g_br1_fd, F_GETFL, 0) | O_NONBLOCK);
     int wfd = sv[1];
@@ -414,17 +411,16 @@ static std::atomic<int> g_br2_ok{0};
 static int g_br2_fd = -1;
 
 static coro::Task<void> br_eof_task() {
-    net::TcpStream s(g_br2_fd);
-    net::BufferedReader br(s);
+    tcp::Stream s(g_br2_fd);
     std::string out;
-    auto r = co_await br.read_exact(8, out);
-    g_br2_ok = (r.err == net::IoError::Eof) ? 1 : -1;
+    auto r = co_await s.read_exact(8, out);
+    g_br2_ok = (r.err == tcp::IoError::Eof) ? 1 : -1;
     coro::EventLoop::current().stop();
 }
 
-static void test_buffered_reader_eof() {
+static void test_stream_buffer_eof() {
     int sv[2];
-    CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0, "socketpair br eof 创建");
+    CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0, "socketpair Stream eof 创建");
     g_br2_fd = sv[0];
     fcntl(g_br2_fd, F_SETFL, fcntl(g_br2_fd, F_GETFL, 0) | O_NONBLOCK);
     int wfd = sv[1];
@@ -543,16 +539,16 @@ int main() {
     }
     // 4. TLS：握手 + 加密读写回环（net::TlsStream）
     test_tls();
-    // 5. 监听/连接：TcpListener::accept + net::connect 回环
+    // 5. 监听/连接：TcpListener::accept + tcp::Connect 回环
     test_listen_connect();
     // 6. connect 被拒/超时：127.0.0.1:1 → nullptr
     test_connect_refused();
     // 7. resolve：主机名/数字 IP 解析
     test_resolve();
-    // 8. BufferedReader：read_until 跨读分隔符 / 单读命中 / read_exact EOF
-    test_buffered_reader_split();
-    test_buffered_reader_single();
-    test_buffered_reader_eof();
+    // 8. Stream 内部缓冲：read_until 跨读分隔符 / 单读命中 / read_exact EOF
+    test_stream_buffer_split();
+    test_stream_buffer_single();
+    test_stream_buffer_eof();
     // 9. SignalWatcher：编译/链接/基本语义冒烟
     test_signal_watcher_smoke();
     // 10. when_all：并发等待两个子任务

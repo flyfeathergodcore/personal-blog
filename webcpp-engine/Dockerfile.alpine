@@ -25,14 +25,13 @@ FROM --platform=linux/amd64 alpine:3.20 AS build
 # mariadb-connector-c-dev：提供 mysql.h（位于 /usr/include/mariadb）+ start/cont 异步 API
 RUN apk add --no-cache \
         build-base g++ cmake make pkgconf \
-        yaml-cpp-dev openssl-dev mariadb-connector-c-dev
+        yaml-cpp-dev openssl-dev mariadb-connector-c-dev mimalloc-dev
 
 WORKDIR /src
 # coro 协程库统一使用 vue-web/coro（连接池、引擎共用同一份，避免 coro
 # EventLoop TLS 双实例）；顶层 CMakeLists 统一编排整体构建
 COPY CMakeLists.txt /src/CMakeLists.txt
 COPY mysql_connection_pool/ /src/mysql_connection_pool/
-COPY coro/ /src/coro/
 COPY webcpp-engine/ /src/webcpp-engine/
 RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
     && cmake --build build -j$(nproc) --target demo_server
@@ -40,13 +39,13 @@ RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
 # ── 阶段 2：运行镜像 ──
 FROM --platform=linux/amd64 alpine:3.20
 # 运行期动态依赖：yaml-cpp / openssl / mariadb-connector-c / libstdc++
-RUN apk add --no-cache yaml-cpp openssl mariadb-connector-c libstdc++
+RUN apk add --no-cache yaml-cpp openssl mariadb-connector-c mimalloc libstdc++
 
 WORKDIR /app
 COPY --from=build /src/build/webcpp-engine/demo_server /app/demo_server
 # 前端静态产物（宿主机 npm run build 产出），由网关 doc_root=/app/www 直接 serve
 COPY my-web/dist/ /app/www/
-COPY webcpp-engine/config/blog.yaml /app/config.yaml
+COPY webcpp-engine/http/config/blog.yaml /app/config.yaml
 EXPOSE 8443
 CMD ["./demo_server", "-c", "/app/config.yaml"]
 

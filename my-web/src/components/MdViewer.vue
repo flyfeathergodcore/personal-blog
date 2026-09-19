@@ -9,6 +9,7 @@ import { ref, watch } from 'vue'
 import MarkdownIt from 'markdown-it'
 import hljs from 'highlight.js'
 import DOMPurify from 'dompurify'
+import { slugify } from '../utils/slugify'
 import 'highlight.js/styles/github.css'
 
 // 锚点数据结构：id 对应标题元素 id（供 el-anchor 跳转），level 为标题层级 h1=1
@@ -55,18 +56,6 @@ const anchors = ref<AnchorItem[]>([])
 
 // 标题 id 计数表：同名标题追加后缀（-2、-3...），保证 id 唯一
 const headingIdCounts = new Map<string, number>()
-
-/**
- * slugify：标题文本转锚点 id（保留中文，其余转小写、空格转连字符）
- * @param text 标题原始文本
- * @returns 生成的锚点 id；空文本兜底返回 'section'
- */
-const slugify = (text: string): string =>
-  text
-    .trim()
-    .toLowerCase()
-    .replace(/[^\w一-龥]+/g, '-')
-    .replace(/^-+|-+$/g, '') || 'section'
 
 /**
  * 生成唯一标题 id：同名标题追加 -2、-3 后缀，保证 id 不冲突

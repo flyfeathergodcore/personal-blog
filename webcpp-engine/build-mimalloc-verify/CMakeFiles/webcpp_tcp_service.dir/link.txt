@@ -1,0 +1,2 @@
+/usr/bin/ar qc libwebcpp_tcp_service.a CMakeFiles/webcpp_tcp_service.dir/tcp/reactor.cpp.o CMakeFiles/webcpp_tcp_service.dir/tcp/channel.cpp.o CMakeFiles/webcpp_tcp_service.dir/tcp/server.cpp.o CMakeFiles/webcpp_tcp_service.dir/tcp/echo_handler.cpp.o
+/usr/bin/ranlib libwebcpp_tcp_service.a

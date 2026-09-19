@@ -1,0 +1,2 @@
+/usr/bin/ar qc libwebcpp_net.a CMakeFiles/webcpp_net.dir/net/signal_watcher.cpp.o CMakeFiles/webcpp_net.dir/net/tls_context.cpp.o CMakeFiles/webcpp_net.dir/net/tls_stream.cpp.o
+/usr/bin/ranlib libwebcpp_net.a

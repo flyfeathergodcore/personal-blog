@@ -1,19 +1,20 @@
 // HTTP/2 端到端测试：真实 TLS 连接上的 H2Session，由 nghttp2 模拟对端。
-// 覆盖小发送窗口下的 DATA 分帧、发送账本扣减、等待 WINDOW_UPDATE 与续发。
-#include "server/h2_session.hpp"
-#include "net/tcp_stream.h"
+// 覆盖发送窗口等待/续发，以及超限请求体被拒绝后的连接窗口回收。
+#include "http/server/h2_session.hpp"
+#include "tcp/stream.hpp"
 #include "net/tls_stream.h"
-#include "protocol/region_pool.hpp"
-#include "router/router.hpp"
-#include "middleware/middleware.hpp"
-#include "handler/request_handler.hpp"
-#include "protocol/response.hpp"
+#include "http/protocol/region_pool.hpp"
+#include "http/router/router.hpp"
+#include "http/middleware/middleware.hpp"
+#include "http/handler/request_handler.hpp"
+#include "http/protocol/response.hpp"
 #include "coro/event_loop.h"
 
 #include <nghttp2/nghttp2.h>
 #include <openssl/pem.h>
 #include <openssl/x509.h>
 #include <atomic>
+#include <algorithm>
 #include <chrono>
 #include <csignal>
 #include <cstdio>
@@ -31,6 +32,10 @@
 namespace {
 constexpr size_t kBodySize = 4096;
 constexpr int32_t kPeerWindow = 1024;
+constexpr size_t kMaxRequestBody = 1024;
+constexpr size_t kOversizedBody = 2048;
+constexpr size_t kValidRequestBody = 1024;
+constexpr int kRejectedStreams = 40;
 
 int g_pass = 0;
 int g_fail = 0;
@@ -121,10 +126,11 @@ struct ServerState {
     MiddlewareManager* middleware = nullptr;
     RegionPool* region_pool = nullptr;
     std::atomic<bool>* handshake_ok = nullptr;
+    size_t max_body_size = 0;
 };
 
 coro::Task<void> ServeH2(ServerState state) {
-    net::TcpStream tcp(state.fd);
+    tcp::Stream tcp(state.fd);
     net::TlsStream tls(std::move(tcp), state.tls_ctx);
     const auto handshake = co_await tls.handshake(5000);
     if (!handshake.ok()) {
@@ -134,6 +140,7 @@ coro::Task<void> ServeH2(ServerState state) {
     state.handshake_ok->store(true, std::memory_order_release);
     auto session = std::make_shared<H2Session>(
         std::move(tls), *state.router, *state.middleware, state.region_pool);
+    session->SetMaxBodySize(state.max_body_size);
     co_await session->Start();
     coro::EventLoop::current().stop();
 }
@@ -147,6 +154,14 @@ struct ClientState {
     bool stream_closed = false;
     bool first_data_seen = false;
     size_t first_data_size = 0;
+    int canceled_streams = 0;
+    uint64_t connection_window_update = 0;
+    int stream_window_updates = 0;
+};
+
+struct UploadBody {
+    std::string bytes;
+    size_t offset = 0;
 };
 
 ssize_t ClientSend(nghttp2_session*, const uint8_t* data, size_t len, int, void* user_data) {
@@ -176,9 +191,36 @@ int OnData(nghttp2_session* session, uint8_t, int32_t stream_id,
     return nghttp2_session_consume(session, stream_id, len);
 }
 
-int OnClose(nghttp2_session*, int32_t, uint32_t, void* user_data) {
-    static_cast<ClientState*>(user_data)->stream_closed = true;
+int OnClose(nghttp2_session*, int32_t stream_id, uint32_t error_code, void* user_data) {
+    auto* state = static_cast<ClientState*>(user_data);
+    if (error_code == NGHTTP2_CANCEL)
+        ++state->canceled_streams;
+    if (stream_id == state->stream_id)
+        state->stream_closed = true;
     return 0;
+}
+
+int OnFrameRecv(nghttp2_session*, const nghttp2_frame* frame, void* user_data) {
+    auto* state = static_cast<ClientState*>(user_data);
+    if (frame->hd.type == NGHTTP2_WINDOW_UPDATE && frame->hd.stream_id == 0)
+        state->connection_window_update += frame->window_update.window_size_increment;
+    else if (frame->hd.type == NGHTTP2_WINDOW_UPDATE)
+        ++state->stream_window_updates;
+    return 0;
+}
+
+ssize_t ReadUpload(nghttp2_session*, int32_t, uint8_t* buf, size_t length,
+                   uint32_t* data_flags, nghttp2_data_source* source, void*) {
+    auto* upload = static_cast<UploadBody*>(source->ptr);
+    const auto remaining = upload->bytes.size() - upload->offset;
+    const auto count = std::min(length, remaining);
+    if (count != 0) {
+        std::memcpy(buf, upload->bytes.data() + upload->offset, count);
+        upload->offset += count;
+    }
+    if (upload->offset == upload->bytes.size())
+        *data_flags |= NGHTTP2_DATA_FLAG_EOF;
+    return static_cast<ssize_t>(count);
 }
 
 bool FlushClient(SSL* ssl, ClientState& state) {
@@ -208,6 +250,7 @@ bool RunClient(int fd, ClientState& state) {
     nghttp2_session_callbacks_set_on_header_callback(callbacks, OnHeader);
     nghttp2_session_callbacks_set_on_data_chunk_recv_callback(callbacks, OnData);
     nghttp2_session_callbacks_set_on_stream_close_callback(callbacks, OnClose);
+    nghttp2_session_callbacks_set_on_frame_recv_callback(callbacks, OnFrameRecv);
     nghttp2_option* options = nullptr;
     nghttp2_option_new(&options);
     nghttp2_option_set_no_auto_window_update(options, 1);
@@ -239,6 +282,84 @@ bool RunClient(int fd, ClientState& state) {
 
     std::vector<uint8_t> input(16 * 1024);
     for (int i = 0; ok && i < 20 && !state.stream_closed; ++i) {
+        const int received = SSL_read(ssl, input.data(), static_cast<int>(input.size()));
+        if (received <= 0) { ok = false; break; }
+        ok = nghttp2_session_mem_recv(state.session, input.data(), received) >= 0
+            && nghttp2_session_send(state.session) == 0
+            && FlushClient(ssl, state);
+    }
+
+    nghttp2_session_del(state.session);
+    state.session = nullptr;
+    SSL_shutdown(ssl);
+    SSL_free(ssl);
+    SSL_CTX_free(ctx);
+    return ok;
+}
+
+bool RunOversizedBodyClient(int fd, ClientState& state) {
+    timeval timeout{5, 0};
+    ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+    SSL_CTX* ctx = SSL_CTX_new(TLS_client_method());
+    SSL* ssl = ctx ? SSL_new(ctx) : nullptr;
+    if (!ssl) { SSL_CTX_free(ctx); return false; }
+    SSL_set_verify(ssl, SSL_VERIFY_NONE, nullptr);
+    SSL_set_fd(ssl, fd);
+    static const unsigned char alpn[] = {2, 'h', '2'};
+    SSL_set_alpn_protos(ssl, alpn, sizeof(alpn));
+    if (SSL_connect(ssl) != 1) { SSL_free(ssl); SSL_CTX_free(ctx); return false; }
+
+    nghttp2_session_callbacks* callbacks = nullptr;
+    nghttp2_session_callbacks_new(&callbacks);
+    nghttp2_session_callbacks_set_send_callback(callbacks, ClientSend);
+    nghttp2_session_callbacks_set_on_header_callback(callbacks, OnHeader);
+    nghttp2_session_callbacks_set_on_data_chunk_recv_callback(callbacks, OnData);
+    nghttp2_session_callbacks_set_on_stream_close_callback(callbacks, OnClose);
+    nghttp2_session_callbacks_set_on_frame_recv_callback(callbacks, OnFrameRecv);
+    const bool created = nghttp2_session_client_new(&state.session, callbacks, &state) == 0;
+    nghttp2_session_callbacks_del(callbacks);
+    if (!created) { SSL_free(ssl); SSL_CTX_free(ctx); return false; }
+
+    bool ok = nghttp2_submit_settings(state.session, NGHTTP2_FLAG_NONE, nullptr, 0) == 0;
+    std::vector<std::unique_ptr<UploadBody>> uploads;
+    uploads.reserve(kRejectedStreams + 1);
+
+    auto submit_upload = [&](size_t body_size, const char* content_length) {
+        auto upload = std::make_unique<UploadBody>();
+        upload->bytes.assign(body_size, 'r');
+        nghttp2_data_provider provider{};
+        provider.source.ptr = upload.get();
+        provider.read_callback = ReadUpload;
+
+        const char* names[] = {
+            ":method", ":scheme", ":authority", ":path", "content-length"
+        };
+        const char* values[] = {
+            "POST", "https", "localhost", "/upload", content_length
+        };
+        nghttp2_nv headers[5];
+        for (size_t i = 0; i < 5; ++i) {
+            headers[i] = {reinterpret_cast<uint8_t*>(const_cast<char*>(names[i])),
+                          reinterpret_cast<uint8_t*>(const_cast<char*>(values[i])),
+                          std::strlen(names[i]), std::strlen(values[i]),
+                          NGHTTP2_NV_FLAG_NONE};
+        }
+        const auto sid = nghttp2_submit_request(
+            state.session, nullptr, headers, 5, &provider, nullptr);
+        uploads.push_back(std::move(upload));
+        return sid;
+    };
+
+    for (int i = 0; ok && i < kRejectedStreams; ++i)
+        ok = submit_upload(kOversizedBody, "2048") > 0;
+    state.stream_id = ok ? submit_upload(kValidRequestBody, "1024") : -1;
+    ok = ok && state.stream_id > 0
+        && nghttp2_session_send(state.session) == 0
+        && FlushClient(ssl, state);
+
+    std::vector<uint8_t> input(16 * 1024);
+    for (int i = 0; ok && i < 100 && !state.stream_closed; ++i) {
         const int received = SSL_read(ssl, input.data(), static_cast<int>(input.size()));
         if (received <= 0) { ok = false; break; }
         ok = nghttp2_session_mem_recv(state.session, input.data(), received) >= 0
@@ -308,11 +429,74 @@ void TestWindowResume() {
     ::close(sockets[1]);
     SSL_CTX_free(server_ctx);
 }
+
+void TestOversizedBodyReturnsConnectionCredit() {
+    TempCertificate certificate;
+    CHECK(certificate.Create(), "为请求体超限测试生成 TLS 证书");
+    if (g_fail != 0) return;
+
+    SSL_CTX* server_ctx = SSL_CTX_new(TLS_server_method());
+    CHECK(server_ctx != nullptr, "为请求体超限测试创建 TLS 服务端上下文");
+    if (!server_ctx) return;
+    static const unsigned char alpn[] = {2, 'h', '2'};
+    SSL_CTX_set_alpn_select_cb(server_ctx,
+        [](SSL*, const unsigned char** out, unsigned char* out_len,
+           const unsigned char* in, unsigned int in_len, void*) {
+            if (SSL_select_next_proto(const_cast<unsigned char**>(out), out_len,
+                                      alpn, sizeof(alpn), in, in_len)
+                != OPENSSL_NPN_NEGOTIATED)
+                return SSL_TLSEXT_ERR_NOACK;
+            return SSL_TLSEXT_ERR_OK;
+        }, nullptr);
+    const bool loaded = SSL_CTX_use_certificate_chain_file(
+                            server_ctx, certificate.cert_path.c_str()) == 1
+        && SSL_CTX_use_PrivateKey_file(
+               server_ctx, certificate.key_path.c_str(), SSL_FILETYPE_PEM) == 1;
+    CHECK(loaded, "为请求体超限测试加载 TLS 证书");
+    if (!loaded) { SSL_CTX_free(server_ctx); return; }
+
+    int sockets[2] = {-1, -1};
+    CHECK(::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0,
+          "为请求体超限测试创建 socketpair");
+    if (sockets[0] < 0) { SSL_CTX_free(server_ctx); return; }
+    ::fcntl(sockets[0], F_SETFL, ::fcntl(sockets[0], F_GETFL, 0) | O_NONBLOCK);
+
+    Router router;
+    router.Post("/upload", std::make_unique<LargeBodyHandler>());
+    MiddlewareManager middleware;
+    RegionPool pool;
+    std::atomic<bool> handshake_ok{false};
+    ServerState server_state{
+        sockets[0], server_ctx, &router, &middleware, &pool, &handshake_ok,
+        kMaxRequestBody
+    };
+    coro::EventLoop loop;
+    auto server_task = ServeH2(server_state);
+    loop.post(server_task.handle());
+    std::thread server_thread([&] { loop.run(); });
+
+    ClientState client;
+    const bool client_ok = RunOversizedBodyClient(sockets[1], client);
+    CHECK(client_ok, "超限流后同连接上的合法请求完成");
+    CHECK(handshake_ok.load(std::memory_order_acquire), "请求体超限测试完成 TLS/ALPN 协商");
+    CHECK(client.canceled_streams == kRejectedStreams, "每个超限请求都以 CANCEL 重置");
+    CHECK(client.connection_window_update > kDefaultWindowSize,
+          "超限 DATA 累计超过初始窗口后仍归还连接信用");
+    CHECK(client.stream_window_updates == 0, "重置流不补充流级接收窗口");
+    CHECK(client.got_200, "超限流未阻塞后续合法流的响应");
+    CHECK(client.stream_closed, "后续合法流正常 END_STREAM");
+
+    loop.stop();
+    server_thread.join();
+    ::close(sockets[1]);
+    SSL_CTX_free(server_ctx);
+}
 }  // namespace
 
 int main() {
     std::signal(SIGPIPE, SIG_IGN);
     TestWindowResume();
+    TestOversizedBodyReturnsConnectionCredit();
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

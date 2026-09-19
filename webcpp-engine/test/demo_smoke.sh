@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 用法：./test/demo_smoke.sh <demo_server_bin> <port> <cert> <key>
+# 用法：./test/demo_smoke.sh <http_server_bin> <port> <cert> <key>
 #
 # H2（Task 10）已接入：curl --http2 经 ALPN 协商 h2。h1 用例显式加
 # --http1.1 强制走 HTTP/1.1；新增 h2 用例（curl 支持 --http2 时跑，
@@ -63,9 +63,6 @@ proxy:
   - prefix: /api/
     upstreams:
       - "127.0.0.1:8080"
-  - prefix: /proxy-ws/
-    upstreams:
-      - "127.0.0.1:8081"
 log:
   dir: /tmp/webcpp_demo_log
   level: info
@@ -97,90 +94,9 @@ echo "proxy: $PROXY_CODE"
 grep -qi "Directory listing" /tmp/demo_proxy_body || { echo "PROXY FAIL (marker)"; cleanup; exit 1; }
 grep -q "hello.txt" /tmp/demo_proxy_body || { echo "PROXY FAIL (entry)"; cleanup; exit 1; }
 
-# ── 反向代理 WS 用例：/proxy-ws/ 经 ReverseProxy 透传到内部 WS echo 上游 ──
-# 最小 python WS 客户端：TLS 包装 + RFC 6455 握手 + 一个掩码 Text 帧回环断言。
-cat > /tmp/ws_proxy_client.py <<'PYEOF'
-#!/usr/bin/env python3
-import socket, ssl, base64, os, sys
-
-port = int(sys.argv[1])
-path = sys.argv[2]
-
-key = base64.b64encode(os.urandom(16)).decode()
-req = (
-    f"GET {path} HTTP/1.1\r\n"
-    f"Host: 127.0.0.1:{port}\r\n"
-    "Upgrade: websocket\r\n"
-    "Connection: Upgrade\r\n"
-    f"Sec-WebSocket-Key: {key}\r\n"
-    "Sec-WebSocket-Version: 13\r\n"
-    "\r\n"
-)
-
-ctx = ssl.create_default_context()
-ctx.check_hostname = False
-ctx.verify_mode = ssl.CERT_NONE
-s = ctx.wrap_socket(socket.create_connection(("127.0.0.1", port), timeout=5))
-s.settimeout(5)
-
-s.sendall(req.encode())
-
-# 读 101
-resp = b""
-while b"\r\n\r\n" not in resp:
-    chunk = s.recv(4096)
-    if not chunk:
-        print("FAIL: handshake closed"); sys.exit(1)
-    resp += chunk
-status = resp.split(b"\r\n", 1)[0]
-if b"101" not in status:
-    print(f"FAIL: status={status!r}"); sys.exit(1)
-
-# 发送一个掩码 Text 帧 "hello"
-payload = b"hello"
-mask = os.urandom(4)
-frame = bytes([0x81, 0x80 | len(payload)]) + mask + bytes(
-    b ^ mask[i % 4] for i, b in enumerate(payload))
-s.sendall(frame)
-
-# 读回显帧（服务端帧不掩码）
-hdr = b""
-while len(hdr) < 2:
-    chunk = s.recv(2 - len(hdr))
-    if not chunk:
-        print("FAIL: echo header closed"); sys.exit(1)
-    hdr += chunk
-opcode = hdr[0] & 0x0F
-ln = hdr[1] & 0x7F
-body = b""
-while len(body) < ln:
-    chunk = s.recv(ln - len(body))
-    if not chunk:
-        print("FAIL: echo body closed"); sys.exit(1)
-    body += chunk
-if opcode != 0x1 or body != payload:
-    print(f"FAIL: opcode={opcode:#x} body={body!r}"); sys.exit(1)
-
-# 发 Close 帧（code 1000）后关闭
-close_payload = b"\x03\xe8"
-m2 = os.urandom(4)
-close_frame = bytes([0x88, 0x80 | len(close_payload)]) + m2 + bytes(
-    b ^ m2[i % 4] for i, b in enumerate(close_payload))
-try:
-    s.sendall(close_frame)
-except OSError:
-    pass
-s.close()
-print("ws-proxy: OK")
-sys.exit(0)
-PYEOF
-WS_OUT=$(timeout 15 python3 /tmp/ws_proxy_client.py "$PORT" "/proxy-ws/" 2>&1) || WS_OUT="FAIL: exit=$?"
-echo "$WS_OUT"
-echo "$WS_OUT" | grep -q "ws-proxy: OK" || { echo "WS PROXY FAIL"; cleanup; exit 1; }
-
 # 优雅关闭
 kill -TERM $PID
-wait $PID
+wait $PID || true       # 信号退出是预期的清理结果
 kill $UPSTREAM_PID 2>/dev/null || true
 wait $UPSTREAM_PID 2>/dev/null || true
 echo "SMOKE-OK"

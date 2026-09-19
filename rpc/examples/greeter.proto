@@ -1,0 +1,24 @@
+// greeter 示例协议：一元 SayHello + 双向流 Chat。
+// 由 protoc 生成消息类（greeter.pb.*）与 RPC 桩（greeter.rpc.h，--rpc_out）。
+syntax = "proto3";
+
+package greeter;
+
+// 问候请求：携带名字
+message HelloRequest {
+  string name = 1;
+}
+
+// 问候响应：携带回执消息
+message HelloReply {
+  string message = 1;
+}
+
+// 问候服务：演示一元与双向流两种调用模型
+service Greeter {
+  // 一元：输入名字返回问候语
+  rpc SayHello(HelloRequest) returns (HelloReply);
+
+  // 双向流：客户端流式发名字，服务端流式回问候语
+  rpc Chat(stream HelloRequest) returns (stream HelloReply);
+}

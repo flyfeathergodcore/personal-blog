@@ -25,7 +25,7 @@ ENV http_proxy= https_proxy= HTTP_PROXY= HTTPS_PROXY= all_proxy= ALL_PROXY=
 # GCC 11 + -O3 + -fcoroutines 有协程优化卡死 bug，GCC 12 已修复。
 RUN apt-get update && apt-get install -y --no-install-recommends -o Acquire::Retries=3 \
         build-essential cmake pkg-config ca-certificates gcc-12 g++-12 \
-        libssl-dev libyaml-cpp-dev libmysqlclient-dev \
+        libssl-dev libyaml-cpp-dev libmysqlclient-dev libnghttp2-dev libmimalloc-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
@@ -33,14 +33,16 @@ WORKDIR /src
 # EventLoop TLS 双实例）；顶层 CMakeLists 统一编排整体构建
 COPY CMakeLists.txt /src/CMakeLists.txt
 COPY mysql_connection_pool/ /src/mysql_connection_pool/
-COPY coro/ /src/coro/
 COPY webcpp-engine/ /src/webcpp-engine/
 # 关闭在镜像内跑 git 相关的问题：直接 cmake 配置 + 构建 demo_server
 # 必须用 GCC（-fcoroutines ABI）：协程 ABI 必须全工程统一——clang 标准 C++20
 # ABI 与 GCC -fcoroutines ABI 互不混链，混链在运行时崩溃。GCC 11 卡死，故用 GCC 12。
+# -DWEBCPP_RPC=OFF：跳过尚未完成的 rpc 开发模块（依赖 protobuf，构建容器未装；
+#   与现网镜像一致——现网即不含 rpc）。RPC 完成后移除该开关并补 COPY rpc/ + protobuf 依赖。
 RUN cmake -S . -B build \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_CXX_COMPILER=g++-12 \
+        -DWEBCPP_RPC=OFF \
     && cmake --build build -j2 --target demo_server
 
 FROM ubuntu:22.04
@@ -48,7 +50,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # 同 build 阶段：清空代理，apt 直连
 ENV http_proxy= https_proxy= HTTP_PROXY= HTTPS_PROXY= all_proxy= ALL_PROXY=
 RUN apt-get update && apt-get install -y --no-install-recommends -o Acquire::Retries=3 \
-        libssl3 libyaml-cpp0.7 libmysqlclient21 libgcc-s1 libstdc++6 ca-certificates \
+        libssl3 libyaml-cpp0.7 libmysqlclient21 libmimalloc2.0 libgcc-s1 libstdc++6 ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -56,6 +58,6 @@ COPY --from=build /src/build/webcpp-engine/demo_server /app/demo_server
 # 前端静态产物（宿主机 npm run build 产出），由网关 doc_root=/app/www 直接 serve，
 # 浏览器同源访问 :8443，/api 无需代理
 COPY my-web/dist/ /app/www/
-COPY webcpp-engine/config/blog.yaml /app/config.yaml
+COPY webcpp-engine/http/config/blog.yaml /app/config.yaml
 EXPOSE 8443
 CMD ["./demo_server", "-c", "/app/config.yaml"]

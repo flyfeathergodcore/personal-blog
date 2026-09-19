@@ -16,3 +16,7 @@ mysql_connection_pool/build/
 
 # superpowers 会话计划文档（本地临时生成）
 docs/
+
+build/
+
+compile_commands.json

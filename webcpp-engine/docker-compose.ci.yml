@@ -1,0 +1,8 @@
+name: webcpp-ci
+
+services:
+  ci:
+    build:
+      context: ..
+      dockerfile: webcpp-engine/ci/Dockerfile
+    image: webcpp-engine-ci:local

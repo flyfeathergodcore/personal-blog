@@ -31,7 +31,7 @@ namespace detail {
 template<typename T> struct Slot { T value{}; std::exception_ptr exc; };
 struct JoinCtl { std::atomic<int> remaining{0}; std::coroutine_handle<> parent; };
 struct JoinAwaiter {
-    std::shared_ptr<JoinCtl> ctl;
+    JoinCtl* ctl;
     // co_await 总是挂起（等待两个子任务完成）
     bool await_ready() noexcept { return false; }
     // 挂起时记录父协程句柄，供最后一个子任务完成时恢复
@@ -39,17 +39,24 @@ struct JoinAwaiter {
     // 恢复时无返回值
     void await_resume() noexcept {}
 };
-// 运行单个子任务并把结果/异常写入共享槽；全部完成后恢复父协程
+// 运行单个子任务并把结果/异常写入共享槽；全部完成后投递父协程。
+// 不能在最后一个子协程的完成栈内直接 resume 父协程：父协程可能随即完成
+// 并销毁控制块。投递可使最后一个子协程先退出使用控制块的代码路径，
+// 再由父协程读取结果并销毁其唯一所有者。
 // 参数：task - 子任务（所有权转移）；slot - 结果槽；ctl - 共享完成计数
 template<typename T>
 coro::Task<void> run_one(coro::Task<T> task, detail::Slot<T>* slot,
-                         std::shared_ptr<detail::JoinCtl> ctl) {
+                         detail::JoinCtl* ctl) {
     try {
         slot->value = co_await coro::AwaitTask<T>{task};
     } catch (...) {
         slot->exc = std::current_exception();
     }
-    if (--ctl->remaining == 0) ctl->parent.resume();
+    if (ctl->remaining.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+        auto parent = ctl->parent;
+        ctl->parent = nullptr;
+        coro::EventLoop::current().post(parent);
+    }
 }
 }  // namespace detail
 
@@ -58,14 +65,16 @@ coro::Task<void> run_one(coro::Task<T> task, detail::Slot<T>* slot,
 template<typename A, typename B>
 coro::Task<std::tuple<A, B>> when_all(coro::Task<A> a, coro::Task<B> b) {
     std::tuple<detail::Slot<A>, detail::Slot<B>> slots;
-    auto ctl = std::make_shared<detail::JoinCtl>();
+    // The parent frame owns the control block. It cannot be destroyed until
+    // both children decrement remaining and the parent is posted again.
+    auto ctl = std::make_unique<detail::JoinCtl>();
     ctl->remaining.store(2);
     auto& sa = std::get<0>(slots);
     auto& sb = std::get<1>(slots);
     coro::EventLoop& loop = coro::EventLoop::current();
-    spawn(detail::run_one<A>(std::move(a), &sa, ctl), loop);
-    spawn(detail::run_one<B>(std::move(b), &sb, ctl), loop);
-    co_await detail::JoinAwaiter{ctl};
+    spawn(detail::run_one<A>(std::move(a), &sa, ctl.get()), loop);
+    spawn(detail::run_one<B>(std::move(b), &sb, ctl.get()), loop);
+    co_await detail::JoinAwaiter{ctl.get()};
     if (sa.exc) std::rethrow_exception(sa.exc);
     if (sb.exc) std::rethrow_exception(sb.exc);
     co_return std::make_tuple(std::move(sa.value), std::move(sb.value));
@@ -74,13 +83,17 @@ coro::Task<std::tuple<A, B>> when_all(coro::Task<A> a, coro::Task<B> b) {
 // void 特化：并发跑两个 void 任务，异常重抛，正常返回 true（WS 双向 relay 用）
 namespace detail {
 struct VoidSlot { std::exception_ptr exc; };
-// 运行单个 void 子任务，异常写入共享槽；全部完成后恢复父协程
+// 运行单个 void 子任务，异常写入共享槽；全部完成后投递父协程。
 // 参数：task - 子任务（所有权转移）；slot - 异常槽；ctl - 共享完成计数
 inline coro::Task<void> run_one_void(coro::Task<void> task, VoidSlot* slot,
-                                     std::shared_ptr<JoinCtl> ctl) {
+                                     JoinCtl* ctl) {
     try { co_await coro::AwaitTask<void>{task}; }
     catch (...) { slot->exc = std::current_exception(); }
-    if (--ctl->remaining == 0) ctl->parent.resume();
+    if (ctl->remaining.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+        auto parent = ctl->parent;
+        ctl->parent = nullptr;
+        coro::EventLoop::current().post(parent);
+    }
 }
 }  // namespace detail
 
@@ -88,12 +101,12 @@ inline coro::Task<void> run_one_void(coro::Task<void> task, VoidSlot* slot,
 // 参数：a, b - 子任务（所有权转移）
 inline coro::Task<bool> when_all_void(coro::Task<void> a, coro::Task<void> b) {
     detail::VoidSlot sa, sb;
-    auto ctl = std::make_shared<detail::JoinCtl>();
+    auto ctl = std::make_unique<detail::JoinCtl>();
     ctl->remaining.store(2);
     coro::EventLoop& loop = coro::EventLoop::current();
-    spawn(detail::run_one_void(std::move(a), &sa, ctl), loop);
-    spawn(detail::run_one_void(std::move(b), &sb, ctl), loop);
-    co_await detail::JoinAwaiter{ctl};
+    spawn(detail::run_one_void(std::move(a), &sa, ctl.get()), loop);
+    spawn(detail::run_one_void(std::move(b), &sb, ctl.get()), loop);
+    co_await detail::JoinAwaiter{ctl.get()};
     if (sa.exc) std::rethrow_exception(sa.exc);
     if (sb.exc) std::rethrow_exception(sb.exc);
     co_return true;

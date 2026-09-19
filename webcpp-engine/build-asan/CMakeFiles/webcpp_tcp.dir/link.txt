@@ -1,0 +1,2 @@
+/usr/bin/ar qc libwebcpp_tcp.a CMakeFiles/webcpp_tcp.dir/tcp/stream.cpp.o CMakeFiles/webcpp_tcp.dir/tcp/listener.cpp.o CMakeFiles/webcpp_tcp.dir/tcp/connector.cpp.o CMakeFiles/webcpp_tcp.dir/tcp/buffered_reader.cpp.o
+/usr/bin/ranlib libwebcpp_tcp.a

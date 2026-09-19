@@ -2,7 +2,7 @@
 # personal-blog 统一构建入口（macOS / Linux / Docker 通用）
 #
 # 一次性构建三个子工程：
-#   coro/                 独立 C++20 协程库（epoll/kqueue 事件循环）
+#   webcpp-engine/coro/   独立 C++20 协程库（epoll/kqueue 事件循环）
 #   mysql_connection_pool/ MySQL 8.0+ 异步连接池（依赖外部 coro）
 #   webcpp-engine/         HTTP/1.1 + HTTP/2 引擎（依赖 coro + OpenSSL + yaml-cpp）
 #
@@ -35,10 +35,14 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # ── 子项目 ──
 option(WEBCPP_MYSQL "构建 MySQL 连接池与博客接口" ON)
-add_subdirectory(coro)
+option(WEBCPP_RPC "构建 RPC 框架" ON)
+add_subdirectory(webcpp-engine/coro)
 if(WEBCPP_MYSQL)
     add_subdirectory(mysql_connection_pool)
 endif()
 add_subdirectory(webcpp-engine)
+if(WEBCPP_RPC)
+    add_subdirectory(rpc)
+endif()
 
 message(STATUS "前端 my-web 不经 CMake 构建：cd my-web && npm run build")

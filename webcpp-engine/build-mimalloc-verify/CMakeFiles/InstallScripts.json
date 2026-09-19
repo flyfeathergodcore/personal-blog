@@ -1,0 +1,8 @@
+{
+	"InstallScripts" : 
+	[
+		"/Users/Zhuanz1/Documents/github/vue-web/webcpp-engine/build-mimalloc-verify/cmake_install.cmake",
+		"/Users/Zhuanz1/Documents/github/vue-web/webcpp-engine/build-mimalloc-verify/coro/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

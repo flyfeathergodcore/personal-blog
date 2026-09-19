@@ -1,0 +1,2 @@
+/usr/bin/ar qc libcoro.a CMakeFiles/coro.dir/src/frame_pool.cpp.o CMakeFiles/coro.dir/src/event_loop.cpp.o CMakeFiles/coro.dir/src/io_poller_kqueue.cpp.o
+/usr/bin/ranlib libcoro.a

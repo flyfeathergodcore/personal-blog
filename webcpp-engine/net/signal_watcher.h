@@ -12,9 +12,9 @@ namespace net {
 
 class SignalWatcher {
 public:
-    // 初始化 signalfd 并 block 指定信号（需在创建前 block，否则信号走默认动作）
-    // 参数：sigs - 需监听的信号集合
-    bool init(const std::vector<int>& sigs);   // signalfd；需调用前在进程内 block 这些信号
+    // Linux 使用 signalfd 并 block 指定信号；macOS/BSD 使用 self-pipe handler，
+    // 保持信号未屏蔽以便 handler 写入管道。
+    bool init(const std::vector<int>& sigs);
     // 协程等待信号并返回信号号；失败返回 -1
     coro::Task<int> wait();
     // 关闭 signalfd（幂等）
